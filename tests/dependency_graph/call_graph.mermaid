@@ -1,0 +1,27 @@
+---
+config:
+  layout: elk
+---
+graph BT
+    subgraph dependency_graph_tests["dependency_graph.tests"]
+        subgraph dependency_graph_tests_test_call_order["test_call_order.py"]
+            dependency_graph_tests_test_call_order_fn_a(["a"])
+            dependency_graph_tests_test_call_order_fn_b(["b"])
+            dependency_graph_tests_test_call_order_fn_c(["c"])
+            dependency_graph_tests_test_call_order_fn_d(["d"])
+        end
+    end
+
+    dependency_graph_tests_test_call_order_fn_b -->|called by| dependency_graph_tests_test_call_order_fn_a
+    dependency_graph_tests_test_call_order_fn_c -->|called by| dependency_graph_tests_test_call_order_fn_a
+    dependency_graph_tests_test_call_order_fn_d -->|called by| dependency_graph_tests_test_call_order_fn_a
+
+
+    classDef dependency_graph_testsDomain fill:#2a78d6,stroke:#184f95,color:#ffffff,stroke-width:1px;
+    classDef fileGroup fill:none,stroke:#999999,stroke-width:1px,stroke-dasharray: 2 2;
+    classDef paramNode fill:#fff3cd,stroke:#c9a227,color:#5c4a00,stroke-width:1px;
+
+    class dependency_graph_tests dependency_graph_testsDomain
+    class dependency_graph_tests_test_call_order fileGroup
+
+    style dependency_graph_tests fill:#e9f1fa,stroke:#2a78d6,stroke-width:2px;

@@ -1,0 +1,20 @@
+---
+config:
+  layout: elk
+---
+graph BT
+    subgraph dependency_graph_tests["dependency_graph.tests"]
+        dependency_graph_tests___init__[__init__.py]
+        dependency_graph_tests_test_call_order[test_call_order.py]
+    end
+
+
+
+    classDef dependency_graph_testsDomain fill:#2a78d6,stroke:#184f95,color:#ffffff,stroke-width:1px;
+    classDef boundary fill:#f5f5f5,stroke:#999999,color:#4d4d4d,stroke-width:1px;
+    classDef broken fill:#d03b3b,stroke:#8a1f1f,stroke-dasharray: 2 2,color:#ffffff;
+    classDef export fill:#4a3aa7,stroke:#2f2569,color:#ffffff,stroke-width:1px;
+
+    class dependency_graph_tests___init__,dependency_graph_tests_test_call_order dependency_graph_testsDomain
+
+    style dependency_graph_tests fill:#e9f1fa,stroke:#2a78d6,stroke-width:2px;

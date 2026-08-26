@@ -1,0 +1,61 @@
+{
+  "target": "dependency_graph.tests",
+  "domains": [
+    {
+      "dotted": "dependency_graph.tests",
+      "id": "dependency_graph_tests",
+      "in_tree": true
+    }
+  ],
+  "functions": [
+    {
+      "id": "dependency_graph_tests_test_call_order_fn_a",
+      "qualname": "a",
+      "params": [],
+      "domain": "dependency_graph.tests",
+      "file_id": "dependency_graph_tests_test_call_order",
+      "filename": "test_call_order.py"
+    },
+    {
+      "id": "dependency_graph_tests_test_call_order_fn_b",
+      "qualname": "b",
+      "params": [],
+      "domain": "dependency_graph.tests",
+      "file_id": "dependency_graph_tests_test_call_order",
+      "filename": "test_call_order.py"
+    },
+    {
+      "id": "dependency_graph_tests_test_call_order_fn_c",
+      "qualname": "c",
+      "params": [],
+      "domain": "dependency_graph.tests",
+      "file_id": "dependency_graph_tests_test_call_order",
+      "filename": "test_call_order.py"
+    },
+    {
+      "id": "dependency_graph_tests_test_call_order_fn_d",
+      "qualname": "d",
+      "params": [],
+      "domain": "dependency_graph.tests",
+      "file_id": "dependency_graph_tests_test_call_order",
+      "filename": "test_call_order.py"
+    }
+  ],
+  "calls": [
+    {
+      "from": "dependency_graph_tests_test_call_order_fn_a",
+      "to": "dependency_graph_tests_test_call_order_fn_b",
+      "via": []
+    },
+    {
+      "from": "dependency_graph_tests_test_call_order_fn_a",
+      "to": "dependency_graph_tests_test_call_order_fn_c",
+      "via": []
+    },
+    {
+      "from": "dependency_graph_tests_test_call_order_fn_a",
+      "to": "dependency_graph_tests_test_call_order_fn_d",
+      "via": []
+    }
+  ]
+}

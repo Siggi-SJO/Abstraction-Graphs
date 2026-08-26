@@ -1,0 +1,34 @@
+{
+  "target": "dependency_graph.tests",
+  "color_order": [
+    "dependency_graph.tests"
+  ],
+  "domains": [
+    {
+      "dotted": "dependency_graph.tests",
+      "id": "dependency_graph_tests",
+      "in_tree": true,
+      "files": [
+        {
+          "id": "dependency_graph_tests___init__",
+          "filename": "__init__.py",
+          "relpath": "__init__.py"
+        },
+        {
+          "id": "dependency_graph_tests_test_call_order",
+          "filename": "test_call_order.py",
+          "relpath": "test_call_order.py"
+        }
+      ],
+      "functions": [],
+      "types_raw": []
+    }
+  ],
+  "standalone_files": [],
+  "broken": [],
+  "violations": [],
+  "edges": [],
+  "own_content_hash": "deb9077f55a914c079fcf4382fd07ea240cbb0017021d8e6d59d615bb69c653b",
+  "reverse_scan_applied": true,
+  "types_cluster": null
+}
