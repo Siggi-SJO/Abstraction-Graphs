@@ -3,29 +3,17 @@
 call which others, same-file or across a module boundary, nested by domain then by
 file -- the same visual convention as the dependency graph, just at function
 granularity instead of file/domain granularity. Pure `ast` parsing, no type checker, no
-execution, no dataflow/type tracing beyond the one targeted exception noted below.
+execution, no dataflow tracing.
 
 Internal (leading-underscore) functions never become nodes -- a chain of calls through
 one or more of them is collapsed into a single edge between the two PUBLIC functions on
 either end, carrying the internal functions it passed through as that edge's `via`
 list. Only public functions that participate in at least one such edge (direct or
-collapsed) are kept -- a function nobody calls and that calls nothing else adds no
-information to a call graph and is dropped, the same "don't show what isn't connected
-to anything" spirit the rest of this toolset already follows.
-
-Type nodes: a function that resolves a named type in its own return annotation is a
-candidate to get a type node, function --> type_node -- but only the FIRST such
-function in a chain (closest to the leaves) actually gets one: if it also calls
-something, directly or transitively, that emits the same type, it's just relaying a
-value whose origin is further down (ingest_document also returns IngestedDocument, but
-it calls ingest_docx, which is where one is actually built -- ingest_docx gets the
-node, not ingest_document). One node instance per true first emitter -- never shared
-globally, so unrelated chains never converge on one hub node -- but every instance of
-the same type shares one color (cycling the same PALETTE used for domains), so a
-recurring type is still recognizable by color alone. A non-first function that also
-emits the same type gets no node, but its own edge to its caller is still colored for
-it, so the chain reads as one continuous thread: ingest_docx -> IngestedDocument ->
-ingest_document -> (colored, no node) -> ingest_documents.
+collapsed), AND are called from a different file than the one they're defined in, are
+kept -- a function nobody calls, that calls nothing else, or that's only ever called
+from within its own file adds no cross-module information to a call graph and is
+dropped, the same "don't show what isn't connected to anything" spirit the rest of this
+toolset already follows.
 
 Operates on an already-computed extract.extract() result (its `domains` list already
 covers the target's own in-tree subtree plus any one-hop external boundary domain).
@@ -33,28 +21,13 @@ covers the target's own in-tree subtree plus any one-hop external boundary domai
 from __future__ import annotations
 
 import ast
+import html
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from extract import dotted_path, file_node_id, parse_imports, resolve_target
 from render import PALETTE, build_forest, light_tint
-
-
-def _domain_for_path(dom_dirs: list[tuple[dict, Path]], path: Path) -> dict | None:
-    """Which tracked domain a path lives under -- the deepest (most specific) matching
-    domain directory, in case domains ever nest."""
-    best = None
-    best_depth = -1
-    for dom, dom_dir in dom_dirs:
-        try:
-            path.relative_to(dom_dir)
-        except ValueError:
-            continue
-        depth = len(dom_dir.parts)
-        if depth > best_depth:
-            best = dom
-            best_depth = depth
-    return best
 
 
 def _is_internal(qualname: str) -> bool:
@@ -137,6 +110,18 @@ def _module_level_type_definitions(file_path: Path) -> dict[str, tuple[str, ast.
     return out
 
 
+def _field_reference_names(class_node: ast.ClassDef) -> list[str]:
+    """Every named-type reference in this class's own annotated fields (module-level
+    `AnnAssign` items in its body) -- pydantic-model/dataclass style. Only the class's
+    own declared attributes; inherited fields and method signatures aren't considered
+    -- this is composition (has-a), not inheritance (is-a)."""
+    out: list[str] = []
+    for item in class_node.body:
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+            out.extend(_annotation_names(item.annotation))
+    return out
+
+
 def resolve_type_definition(
     repo_root: Path, file_dotted: str, file_path: Path, name: str, cache: dict
 ) -> tuple[str, Path] | None:
@@ -165,35 +150,30 @@ def resolve_type_definition(
     return None
 
 
+def _bare_constructor_calls(fn_node: ast.AST) -> list[str]:
+    """Every bare `Name(...)` call anywhere in this function's body -- candidates for a
+    literal construction of some tracked type, resolved by the caller. Deliberately
+    whole-body, not just the return statement: a type is often built and immediately
+    nested inside another type's own constructor (`return Category(slots=[Slot(...) for
+    row in rows])`), or built up across a loop before being wrapped (`slots.append(Slot(...))`
+    ... `return Category(slots=slots)`) -- restricting the search to the return
+    expression alone would miss both of these common patterns, and there's no variable
+    tracking here to follow a value from an intermediate assignment to its eventual use
+    -- whole-body is the cheap approximation that still catches them."""
+    names: list[str] = []
+    for node in ast.walk(fn_node):
+        if node is fn_node or not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            names.append(node.func.id)
+    return list(dict.fromkeys(names))
+
+
 @dataclass
 class SigFunction:
     qualname: str
     node: ast.AST
     class_name: str | None = None
-    params: list[str] = field(default_factory=list)
-    param_annotations: list[ast.AST] = field(default_factory=list)
-    return_annotation: ast.AST | None = None
-
-
-def _param_list(node: ast.FunctionDef | ast.AsyncFunctionDef, skip_first: bool) -> tuple[list[str], list[ast.AST]]:
-    """`name: annotation` for each parameter -- self/cls omitted for a method, since
-    it's implicit. Positional-only, regular, and keyword-only params are all included
-    (in that order, undifferentiated -- this is a diagram label, not a real call
-    signature); *args/**kwargs are skipped as visual noise unless something downstream
-    ever needs them. Also returns the raw annotation expressions (for type resolution),
-    parallel to but separate from the rendered text."""
-    all_args = node.args.posonlyargs + node.args.args + node.args.kwonlyargs
-    if skip_first and all_args and all_args[0].arg in ("self", "cls"):
-        all_args = all_args[1:]
-    parts = []
-    annotations = []
-    for a in all_args:
-        text = a.arg
-        if a.annotation is not None:
-            text += f": {ast.unparse(a.annotation)}"
-            annotations.append(a.annotation)
-        parts.append(text)
-    return parts, annotations
 
 
 def _functions_in_file(file_path: Path) -> list[SigFunction]:
@@ -204,17 +184,11 @@ def _functions_in_file(file_path: Path) -> list[SigFunction]:
     out: list[SigFunction] = []
     for item in tree.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            params, param_annotations = _param_list(item, skip_first=False)
-            out.append(SigFunction(item.name, item, None, params, param_annotations, item.returns))
+            out.append(SigFunction(item.name, item))
         elif isinstance(item, ast.ClassDef):
             for sub in item.body:
                 if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    params, param_annotations = _param_list(sub, skip_first=True)
-                    out.append(
-                        SigFunction(
-                            f"{item.name}.{sub.name}", sub, item.name, params, param_annotations, sub.returns
-                        )
-                    )
+                    out.append(SigFunction(f"{item.name}.{sub.name}", sub, item.name))
     return out
 
 
@@ -365,54 +339,147 @@ def extract_call_graph(repo_root: Path, extracted: dict) -> dict:
     dom_dirs = [(dom, Path(repo_root, *dom["dotted"].split("."))) for dom in extracted["domains"]]
 
     all_functions: dict[str, dict] = {}
-    type_resolve_cache: dict = {}
-    # Where a type_key is actually DEFINED (as opposed to wherever it's emitted from or
-    # re-exported through) -- populated by every successful type resolution below, used
-    # later to decide which types are candidates to collapse into one shared group node.
-    type_defining_file: dict[str, dict] = {}
-
-    def record_type_location(type_key: str, path: Path) -> None:
-        if type_key in type_defining_file:
-            return
-        dom = _domain_for_path(dom_dirs, path)
-        if dom is None:
-            return  # defining file isn't under any tracked domain -- not groupable
-        type_defining_file[type_key] = {
-            "domain": dom["dotted"],
-            "file_id": file_node_id(repo_root, path),
-            "filename": path.name,
-        }
-
+    # Each function's own AST node plus the file context it was found in -- kept
+    # alongside all_functions (not folded into it) since it's only needed for the
+    # type-construction scan below, not for anything JSON-serializable.
+    function_context: dict[str, tuple[ast.AST, str, Path]] = {}
     for dom, dom_dir in dom_dirs:
         for f in dom["files"]:
             file_path = dom_dir / f["relpath"]
             file_dotted = dotted_path(repo_root, file_path)
             for sig in _functions_in_file(file_path):
                 function_id = f'{f["id"]}_fn_{sig.qualname.replace(".", "_")}'
-
-                # The first resolvable named type referenced in the function's own
-                # return annotation -- this is where that type is first introduced, so
-                # it's THIS function that gets the type node (see below), not
-                # necessarily whatever's at the top of the call chain.
-                emits_type_key = None
-                emits_type_name = None
-                for name in _annotation_names(sig.return_annotation):
-                    resolved = resolve_type_definition(repo_root, file_dotted, file_path, name, type_resolve_cache)
-                    if resolved is not None:
-                        emits_type_key = f"{resolved[0]}.{name}"
-                        emits_type_name = name
-                        break
-
                 all_functions[function_id] = {
                     "id": function_id,
                     "qualname": sig.qualname,
-                    "params": sig.params,
                     "domain": dom["dotted"],
                     "file_id": f["id"],
                     "filename": f["filename"],
-                    "emits_type_key": emits_type_key,
-                    "emits_type_name": emits_type_name,
                 }
+                function_context[function_id] = (sig.node, file_dotted, file_path)
+
+    # -- Main-type classification -------------------------------------------------
+    #
+    # A type is "main" -- worth tracking through the call graph at all -- if it's
+    # something an external caller of this domain actually interacts with, as
+    # opposed to a utility type exported only incidentally (type guards, sentinels,
+    # standalone aliases). Two ways in:
+    #
+    #   1. It's named directly in an exported function's own signature (return type
+    #      or a non-primitive param type) -- the caller hands it in or gets it back.
+    #   2. It's the root of the composition hierarchy among this domain's exported
+    #      types -- zero out-degree (never itself a field of another exported type)
+    #      but nonzero in-degree (things ARE composed into it). Catches a pure-types
+    #      domain with no exported functions to seed from.
+    #
+    # From either kind of seed, everything transitively composed INTO it (its own
+    # fields, their fields, ...) is main too -- if you get a Category back, you will
+    # encounter its Slots and their Columns, even though neither ever appears
+    # directly in a function signature or is itself a root.
+    #
+    # Composition edges point field-type --> containing-type (same "dependency flows
+    # up to dependent" convention as everything else here); union/alias membership
+    # counts as composition too (a Slot value might really be a FixedSlot). Only
+    # considered among types this tool can resolve to an in-tree definition -- a
+    # field typed as some external/stdlib class contributes no edge. Self-loops
+    # (recursive fields, e.g. Category.subcategories: list[Category]) are dropped
+    # rather than counted -- a type composed of itself isn't "contained" by
+    # anything new. Non-self cycles between two DIFFERENT types aren't specially
+    # unwound (no strongly-connected-component collapsing) -- deliberately deferred
+    # until an actual cycle is found to matter in practice; today, a cycle like that
+    # just means the DAG-root search finds nothing inside that cluster.
+    type_resolve_cache: dict = {}
+
+    all_type_defs: dict[str, dict] = {}
+    for dom, dom_dir in dom_dirs:
+        for f in dom["files"]:
+            file_path = dom_dir / f["relpath"]
+            file_dotted = dotted_path(repo_root, file_path)
+            for name, (kind, node) in _module_level_type_definitions(file_path).items():
+                type_key = f"{file_dotted}.{name}"
+                all_type_defs[type_key] = {
+                    "kind": kind,
+                    "node": node,
+                    "file_dotted": file_dotted,
+                    "file_path": file_path,
+                    "name": name,
+                    "domain": dom["dotted"],
+                    "file_id": f["id"],
+                    "filename": f["filename"],
+                }
+
+    composition_edges: set[tuple[str, str]] = set()
+    for type_key, td in all_type_defs.items():
+        referenced_names = (
+            _field_reference_names(td["node"]) if td["kind"] == "class" else _annotation_names(td["node"])
+        )
+        for name in referenced_names:
+            resolved = resolve_type_definition(repo_root, td["file_dotted"], td["file_path"], name, type_resolve_cache)
+            if resolved is None:
+                continue
+            ref_key = f"{resolved[0]}.{name}"
+            if ref_key == type_key or ref_key not in all_type_defs:
+                continue
+            composition_edges.add((ref_key, type_key))
+
+    out_degree: dict[str, int] = {}
+    in_degree: dict[str, int] = {}
+    predecessors: dict[str, list[str]] = {}
+    successors: dict[str, list[str]] = {}
+    for a, b in composition_edges:
+        out_degree[a] = out_degree.get(a, 0) + 1
+        in_degree[b] = in_degree.get(b, 0) + 1
+        predecessors.setdefault(b, []).append(a)
+        successors.setdefault(a, []).append(b)
+
+    exported_type_keys: set[str] = set()
+    seed_types: set[str] = set()
+    for dom, dom_dir in dom_dirs:
+        init_entry = next((f for f in dom["files"] if f["filename"] == "__init__.py"), None)
+        if init_entry is None:
+            continue
+        init_path = dom_dir / init_entry["relpath"]
+
+        for name in dom.get("types_raw", []):
+            resolved = resolve_type_definition(repo_root, dom["dotted"], init_path, name, type_resolve_cache)
+            if resolved is not None:
+                exported_type_keys.add(f"{resolved[0]}.{name}")
+
+        for name in dom.get("functions", []):
+            resolved = resolve_function_definition(repo_root, dom["dotted"], init_path, name, {})
+            if resolved is None:
+                continue
+            def_dotted, def_path = resolved
+            sig = next((s for s in _functions_in_file(def_path) if s.qualname == name), None)
+            if sig is None:
+                continue
+            fn_node = sig.node
+            all_args = fn_node.args.posonlyargs + fn_node.args.args + fn_node.args.kwonlyargs
+            for ann in [fn_node.returns] + [a.annotation for a in all_args if a.annotation is not None]:
+                for ann_name in _annotation_names(ann):
+                    resolved_ann = resolve_type_definition(repo_root, def_dotted, def_path, ann_name, type_resolve_cache)
+                    if resolved_ann is not None:
+                        seed_types.add(f"{resolved_ann[0]}.{ann_name}")
+
+    root_types = {
+        key for key in exported_type_keys
+        if out_degree.get(key, 0) == 0 and in_degree.get(key, 0) > 0
+    }
+
+    def closure_from(seed: str) -> set[str]:
+        seen: set[str] = set()
+        stack = [seed]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            stack.extend(predecessors.get(cur, []))
+        return seen
+
+    main_type_keys: set[str] = set()
+    for seed in seed_types | root_types:
+        main_type_keys |= closure_from(seed)
 
     # Ordered by caller: each caller's callees are collected in the same order those
     # calls actually happen in its body (see _call_targets), deduped so a callee called
@@ -463,6 +530,22 @@ def extract_call_graph(repo_root: Path, extracted: dict) -> dict:
                         continue
                     record_call(caller_id, callee_id)
 
+    # Construction pseudo-edges: for every function whose body literally calls a main
+    # type's own constructor (anywhere -- see _bare_constructor_calls), record a call
+    # into a synthetic "type:<type_key>" node, injected into the same adjacency used
+    # for real calls above. This lets the internal-function collapsing below (walk())
+    # attribute a construction found inside a private helper up to whichever public
+    # function actually reaches it, exactly the way it already attributes ordinary
+    # calls -- no separate mechanism needed.
+    for function_id, (fn_node, file_dotted, file_path) in function_context.items():
+        for name in _bare_constructor_calls(fn_node):
+            resolved = resolve_type_definition(repo_root, file_dotted, file_path, name, type_resolve_cache)
+            if resolved is None:
+                continue
+            type_key = f"{resolved[0]}.{name}"
+            if type_key in main_type_keys:
+                record_call(function_id, f"type:{type_key}")
+
     adjacency = call_order
 
     public_ids = {fid for fid, fn in all_functions.items() if not _is_internal(fn["qualname"])}
@@ -474,14 +557,16 @@ def extract_call_graph(repo_root: Path, extracted: dict) -> dict:
     # internal functions it passed through as `via`. An internal function never becomes
     # a node of its own -- it only survives as a name listed on the edge(s) it
     # mediates. A chain that never reaches another public function (a true dead end)
-    # produces no edge at all, same as any other unconnected function.
+    # produces no edge at all, same as any other unconnected function. A "type:<key>"
+    # pseudo node (see above) is terminal the same way a public function is -- it never
+    # has outgoing edges of its own, so it's never a candidate to recurse into.
     collapsed: dict[tuple[str, str], set[str]] = {}
 
     def walk(node: str, path_internals: frozenset[str], origin: str) -> None:
         for callee in adjacency.get(node, []):
             if callee == origin:
                 continue  # a chain looping back to its own origin isn't a real edge
-            if callee in public_ids:
+            if callee in public_ids or callee.startswith("type:"):
                 collapsed.setdefault((origin, callee), set()).update(path_internals)
             elif callee in internal_ids and callee not in path_internals:
                 walk(callee, path_internals | {callee}, origin)
@@ -489,162 +574,118 @@ def extract_call_graph(repo_root: Path, extracted: dict) -> dict:
     for p in sorted(public_ids):
         walk(p, frozenset(), p)
 
-    # Domain exports: every name in a domain's own __all__ -- both types and functions
-    # -- shown regardless of whether it currently participates in any call, since being
-    # publicly exported alone earns it a place here. A type always gets its own export
-    # node (types have no "regular node" elsewhere in this graph). A function only gets
-    # a separate export node if __init__.py is re-exporting it from somewhere else --
-    # if __init__.py is where it's actually `def`'d, it's forced into the normal
-    # function-node set below instead, so it doesn't appear twice.
-    domain_exports: dict[str, dict] = {}
-    forced_function_ids: set[str] = set()
-    for dom, dom_dir in dom_dirs:
-        init_entry = next((f for f in dom["files"] if f["filename"] == "__init__.py"), None)
-        if init_entry is None:
-            continue
-        init_path = dom_dir / init_entry["relpath"]
+    function_calls = {(a, b): mediators for (a, b), mediators in collapsed.items() if not b.startswith("type:")}
+    construct_edges = {(a, b): mediators for (a, b), mediators in collapsed.items() if b.startswith("type:")}
+    construct_touches: dict[str, set[str]] = {}
+    for a, b in construct_edges:
+        construct_touches.setdefault(a, set()).add(b[len("type:"):])
 
-        for name in dom.get("types_raw", []):
-            resolved = resolve_type_definition(repo_root, dom["dotted"], init_path, name, type_resolve_cache)
-            if resolved is None:
-                continue
-            type_key = f"{resolved[0]}.{name}"
-            record_type_location(type_key, resolved[1])
-            export_id = f'{init_entry["id"]}_export_type_{name}'
-            domain_exports[export_id] = {
-                "id": export_id,
-                "kind": "type",
-                "domain": dom["dotted"],
-                "file_id": init_entry["id"],
-                "filename": init_entry["filename"],
-                "name": name,
-                "type_key": type_key,
-            }
-
-        for name in dom.get("functions", []):
-            local_fid = f'{init_entry["id"]}_fn_{name}'
-            if local_fid in all_functions:
-                forced_function_ids.add(local_fid)
-                continue
-            # Re-exported from elsewhere -- force its own real node too (not just the
-            # marker below), wherever it's actually defined. `real_id` (when resolved)
-            # is what lets render_call_graph draw the "re-exports" edge back to it.
-            resolved = resolve_function_definition(repo_root, dom["dotted"], init_path, name, resolve_cache)
-            real_fid = None
+    # Signature touches: does a function's own return/param annotations directly name
+    # a main type? Purely local per-function facts -- unlike construction (a body-level
+    # detail that can be buried in a private helper), a function's own signature is
+    # already right there on whichever node represents it, public or not; no
+    # internal-collapsing needed, since what matters is what the INCLUDED function's
+    # own annotations say, not what some uncredited helper's annotations say.
+    return_touches: dict[str, set[str]] = {}
+    accept_touches: dict[str, set[str]] = {}
+    for function_id, (fn_node, file_dotted, file_path) in function_context.items():
+        for ret_name in _annotation_names(fn_node.returns):
+            resolved = resolve_type_definition(repo_root, file_dotted, file_path, ret_name, type_resolve_cache)
             if resolved is not None:
-                candidate_fid = f"{file_node_id(repo_root, resolved[1])}_fn_{name}"
-                if candidate_fid in all_functions:
-                    forced_function_ids.add(candidate_fid)
-                    real_fid = candidate_fid
-            export_id = f'{init_entry["id"]}_export_fn_{name}'
-            domain_exports[export_id] = {
-                "id": export_id,
-                "kind": "function",
-                "domain": dom["dotted"],
-                "file_id": init_entry["id"],
-                "filename": init_entry["filename"],
-                "name": name,
-                "real_id": real_fid,
-            }
+                type_key = f"{resolved[0]}.{ret_name}"
+                if type_key in main_type_keys:
+                    return_touches.setdefault(function_id, set()).add(type_key)
+        all_args = fn_node.args.posonlyargs + fn_node.args.args + fn_node.args.kwonlyargs
+        for arg in all_args:
+            for arg_name in _annotation_names(arg.annotation):
+                resolved = resolve_type_definition(repo_root, file_dotted, file_path, arg_name, type_resolve_cache)
+                if resolved is not None:
+                    type_key = f"{resolved[0]}.{arg_name}"
+                    if type_key in main_type_keys:
+                        accept_touches.setdefault(function_id, set()).add(type_key)
 
-    # A public function gets a node if it's exported (forced_function_ids, above), OR
-    # it's called from a DIFFERENT file than the one it's defined in -- "called from
-    # outside the module" in the literal Python sense (a .py file is a module). A
-    # function called only from within its own file, and never exported, doesn't
-    # qualify on its own: it's still fully internal to that file's own story, same
-    # spirit as collapsing away leading-underscore functions, just for the "nobody
-    # outside this file needed to know this exists" case instead of the naming
-    # convention. Both ends of a qualifying cross-file edge are included, not just the
-    # callee -- the caller has to be a node too, or the very edge that justifies the
-    # callee's inclusion would have nothing to attach to. `calls` is filtered to match
-    # below, so no edge ever references a function that didn't otherwise earn a node.
-    cross_file_ids: set[str] = set()
-    for a, b in collapsed:
+    # A public function gets a node only if it's called from a DIFFERENT file than the
+    # one it's defined in -- "called from outside the module" in the literal Python
+    # sense (a .py file is a module). A function called only from within its own file
+    # doesn't qualify: it's still fully internal to that file's own story, same spirit
+    # as collapsing away leading-underscore functions, just for the "nobody outside
+    # this file needed to know this exists" case instead of the naming convention.
+    # Both ends of a qualifying cross-file edge are included, not just the callee --
+    # the caller has to be a node too, or the very edge that justifies the callee's
+    # inclusion would have nothing to attach to. Touching a main type (constructing,
+    # returning, or accepting one) earns a node on its own, independent of the
+    # cross-file rule.
+    used_ids: set[str] = set()
+    for a, b in function_calls:
         if all_functions[a]["file_id"] != all_functions[b]["file_id"]:
-            cross_file_ids.add(a)
-            cross_file_ids.add(b)
-    used_ids = forced_function_ids | cross_file_ids
+            used_ids.add(a)
+            used_ids.add(b)
+    for fid in set(construct_touches) | set(return_touches) | set(accept_touches):
+        used_ids.add(fid)
     functions = {fid: all_functions[fid] for fid in used_ids}
 
-    # Type nodes: wherever a tracked function resolves a named type in its own return
-    # annotation, that's a candidate for where the type is introduced -- but only the
-    # FIRST such function in a chain (the one closest to the leaves) actually gets a
-    # node of its own: a function that emits type T but also calls something, directly
-    # or transitively, that ALSO emits T is just relaying a value that already has its
-    # origin further down (e.g. ingest_document also returns IngestedDocument, but it
-    # calls ingest_docx, which is where an IngestedDocument is actually built -- so
-    # ingest_docx gets the node, not ingest_document). One node instance per true first
-    # emitter, never shared globally, but every instance of the same type shares one
-    # color (assigned in render_call_graph) so a type re-emitted at several unrelated
-    # first-emission points still reads as the same type. A non-first function that
-    # also emits T doesn't get a node, but its edge to its own caller is still colored
-    # for T (render_call_graph), so the chain reads as one continuous colored thread:
-    # ingest_docx -> IngestedDocument -> ingest_document -> (colored, no node) ->
-    # ingest_documents.
-    forward: dict[str, list[str]] = {}
-    for a, b in collapsed:
-        forward.setdefault(a, []).append(b)
+    # Per-main-type highlight sets, precomputed here rather than shipped as raw graph
+    # structure for the frontend to re-derive: for each main type T, every included
+    # function that touches T directly (constructs/returns/accepts it), PLUS every
+    # function that only touches something T is transitively a component of (T is a
+    # field of U, U of V, ... -- walking `successors`, i.e. "what T flows into") gets
+    # a lower-priority "component" tag instead. A function touching T both directly
+    # and via some ancestor keeps the stronger, more specific tag.
+    KIND_PRIORITY = {"constructs": 0, "returns": 1, "accepts": 2, "component": 3}
 
-    def reachable_from(start: str) -> set[str]:
+    def ancestors_of(key: str) -> set[str]:
         seen: set[str] = set()
-        stack = list(forward.get(start, []))
+        stack = [key]
         while stack:
             cur = stack.pop()
             if cur in seen:
                 continue
             seen.add(cur)
-            stack.extend(forward.get(cur, []))
+            stack.extend(successors.get(cur, []))
         return seen
 
-    emitted_types = {}
-    for fid in sorted(used_ids):
-        type_key = all_functions[fid]["emits_type_key"]
-        if not type_key:
-            continue
-        if any(all_functions[d]["emits_type_key"] == type_key for d in reachable_from(fid)):
-            continue  # a descendant already emits this same type -- not the first
-        emitted_types[f"{fid}_emits"] = {
-            "function": fid,
-            "type_key": type_key,
-            "name": all_functions[fid]["emits_type_name"],
-        }
+    main_types_out = []
+    for type_key in sorted(main_type_keys):
+        relevant = ancestors_of(type_key) - {type_key}
+        highlights: dict[str, str] = {}
 
-    # Type groups: when 2+ distinct type_keys exported from the same __init__.py share
-    # the same DEFINING file, they collapse into one shared node for that file instead
-    # of each getting their own export marker -- the "too many types" clutter case,
-    # scoped only to the __init__.py view. A file contributing only one exported type
-    # isn't grouped; it keeps its existing individual export marker untouched. This
-    # never touches the chain-based first-emitter mechanism (emitted_types) -- those
-    # nodes are unrelated to what a domain's __init__.py happens to export.
-    used_type_keys = {e["type_key"] for e in domain_exports.values() if e["kind"] == "type"}
+        def note(fid: str, kind: str) -> None:
+            if fid not in used_ids:
+                return
+            current = highlights.get(fid)
+            if current is None or KIND_PRIORITY[kind] < KIND_PRIORITY[current]:
+                highlights[fid] = kind
 
-    by_defining_file: dict[tuple[str, str], set[str]] = {}
-    for key in used_type_keys:
-        loc = type_defining_file.get(key)
-        if loc is None:
-            continue
-        by_defining_file.setdefault((loc["domain"], loc["file_id"]), set()).add(key)
+        for touches, kind in ((construct_touches, "constructs"), (return_touches, "returns"), (accept_touches, "accepts")):
+            for fid, keys in touches.items():
+                if type_key in keys:
+                    note(fid, kind)
+                elif keys & relevant:
+                    note(fid, "component")
 
-    type_groups: dict[str, dict] = {}
-    type_key_to_group: dict[str, str] = {}
-    for (domain, file_id), keys in by_defining_file.items():
-        if len(keys) < 2:
-            continue
-        loc = type_defining_file[next(iter(keys))]
-        group_id = f"{file_id}_types"
-        type_groups[group_id] = {
-            "id": group_id,
-            "domain": domain,
-            "file_id": file_id,
-            "filename": loc["filename"],
-            "name": f"{Path(loc['filename']).stem}_types",
-        }
-        for k in keys:
-            type_key_to_group[k] = group_id
+        # produces/consumes: unlike `highlights` (one priority-picked kind per
+        # function, for node border styling), these are plain membership sets used to
+        # tag the two edges between a caller and callee -- the "returns" edge (value
+        # flows callee -> caller) is relevant to T if the callee PRODUCES T (or
+        # something T is a component of); the "calls" edge (caller -> callee) is
+        # relevant if the callee CONSUMES T the same way. A function that both accepts
+        # and returns T ends up in both sets -- `highlights` would have collapsed that
+        # to a single kind, which is fine for a node's one border color but would
+        # silently drop one of the two edge relationships if reused here.
+        relevant_incl = relevant | {type_key}
+        produces = sorted(
+            {fid for fid, keys in construct_touches.items() if fid in used_ids and keys & relevant_incl}
+            | {fid for fid, keys in return_touches.items() if fid in used_ids and keys & relevant_incl}
+        )
+        consumes = sorted(
+            {fid for fid, keys in accept_touches.items() if fid in used_ids and keys & relevant_incl}
+        )
 
-    for e in domain_exports.values():
-        if e["kind"] == "type":
-            e["group_id"] = type_key_to_group.get(e["type_key"])
+        td = all_type_defs[type_key]
+        main_types_out.append({
+            "type_key": type_key, "name": td["name"], "highlights": highlights,
+            "produces": produces, "consumes": consumes,
+        })
 
     return {
         "target": extracted["target"],
@@ -659,12 +700,10 @@ def extract_call_graph(repo_root: Path, extracted: dict) -> dict:
                 "to": b,
                 "via": sorted({all_functions[m]["qualname"] for m in mediators}),
             }
-            for (a, b), mediators in collapsed.items()
+            for (a, b), mediators in function_calls.items()
             if a in used_ids and b in used_ids
         ],
-        "emitted_types": [{"id": eid, **info} for eid, info in emitted_types.items()],
-        "domain_exports": [domain_exports[k] for k in sorted(domain_exports)],
-        "type_groups": [type_groups[k] for k in sorted(type_groups)],
+        "main_types": main_types_out,
     }
 
 
@@ -680,18 +719,6 @@ def render_call_graph(call_graph: dict) -> str:
 
     for fn in call_graph["functions"]:
         file_slot(fn["domain"], fn["file_id"], fn["filename"])["function_ids"].append(fn["id"])
-    # A domain export's own __init__.py file subgraph must exist even when no function
-    # happens to live in that same file.
-    exports_by_file: dict[tuple[str, str], list[dict]] = {}
-    for de in call_graph.get("domain_exports", []):
-        file_slot(de["domain"], de["file_id"], de["filename"])
-        exports_by_file.setdefault((de["domain"], de["file_id"]), []).append(de)
-    # Same for a type group's defining file -- it must exist even when no function or
-    # export happens to live there too.
-    groups_by_file: dict[tuple[str, str], list[dict]] = {}
-    for g in call_graph.get("type_groups", []):
-        file_slot(g["domain"], g["file_id"], g["filename"])
-        groups_by_file.setdefault((g["domain"], g["file_id"]), []).append(g)
 
     files_by_domain: dict[str, list[tuple[str, dict]]] = {}
     for (domain_dotted, file_id), entry in file_entries.items():
@@ -707,42 +734,6 @@ def render_call_graph(call_graph: dict) -> str:
     def escape(text: str) -> str:
         return text.replace('"', "&quot;")
 
-    # A type_key's color is shared across every instance of that type, wherever it
-    # occurs -- see the module docstring's note on type nodes never being shared
-    # globally: each first-emitting function gets its OWN node instance, but recurring
-    # types still read as the same color. Domain-export type nodes share this same
-    # color map (keyed by type_key) UNLESS grouped: a grouped export (extract_call_graph's
-    # type_groups) has no color of its own -- ckey() resolves it to its group's id
-    # instead. Grouping only ever affects the domain-export view, never the chain-based
-    # emitted_types mechanism, so ckey() is a no-op for any type_key that only appears
-    # there.
-    group_id_by_type_key: dict[str, str] = {}
-    for e in call_graph.get("domain_exports", []):
-        if e["kind"] == "type" and e.get("group_id"):
-            group_id_by_type_key[e["type_key"]] = e["group_id"]
-
-    def ckey(type_key: str) -> str:
-        return group_id_by_type_key.get(type_key, type_key)
-
-    emitted_type_keys = {e["type_key"] for e in call_graph.get("emitted_types", [])}
-    export_color_keys = {ckey(e["type_key"]) for e in call_graph.get("domain_exports", []) if e["kind"] == "type"}
-    type_color = {
-        key: PALETTE[i % len(PALETTE)]
-        for i, key in enumerate(sorted(emitted_type_keys | export_color_keys))
-    }
-    emit_by_function = {e["function"]: e for e in call_graph.get("emitted_types", [])}
-
-    # A function's own node stays a plain, uncluttered label -- its parameters (if any)
-    # get their own node instead, one per function, colored distinctly (see the
-    # paramNode classDef below) and feeding into it with a single edge, rather than
-    # being crammed into the function's own label. A first-emitting function's type
-    # (see extract_call_graph) gets its own node the same way, in the same file
-    # subgraph as the function, colored by type_color rather than a shared classDef
-    # since each type has its own distinct color.
-    param_node_ids: list[str] = []
-    param_edges: list[tuple[str, str]] = []
-    emit_edges: list[tuple[str, str, str]] = []  # (function_id, emit_id, type_key)
-
     def emit_domain(dom: dict, children: dict[str, list[dict]], indent: str) -> list[str]:
         out = [f'{indent}subgraph {dom["id"]}["{dom["dotted"]}"]']
         pad = indent + "    "
@@ -752,32 +743,6 @@ def render_call_graph(call_graph: dict) -> str:
             for fn_id in entry["function_ids"]:
                 fn = functions[fn_id]
                 out.append(f'{fpad}{fn_id}(["{escape(fn["qualname"])}"])')
-                if fn["params"]:
-                    param_id = f"{fn_id}_params"
-                    label = escape("<br/>".join(fn["params"]))
-                    out.append(f'{fpad}{param_id}["{label}"]')
-                    param_node_ids.append(param_id)
-                    param_edges.append((param_id, fn_id))
-                emitted = emit_by_function.get(fn_id)
-                if emitted:
-                    out.append(f'{fpad}{emitted["id"]}[["{escape(emitted["name"])}"]]')
-                    emit_edges.append((fn_id, emitted["id"], emitted["type_key"]))
-            # Domain exports (types and re-exported functions) belonging to this file --
-            # see extract_call_graph's domain_exports for what's already been folded
-            # into a regular function node instead (locally-defined exported functions).
-            # A grouped type export has no marker of its own here -- it's represented by
-            # its group node in its defining file's subgraph instead (below).
-            # Functions first, then types -- explicit rather than relying on id sort order.
-            file_exports = exports_by_file.get((dom["dotted"], file_id), [])
-            for de in sorted(file_exports, key=lambda e: e["kind"] != "function"):
-                if de["kind"] == "type":
-                    if de.get("group_id"):
-                        continue
-                    out.append(f'{fpad}{de["id"]}[["{escape(de["name"])}"]]')
-                else:
-                    out.append(f'{fpad}{de["id"]}(["{escape(de["name"])}"])')
-            for g in groups_by_file.get((dom["dotted"], file_id), []):
-                out.append(f'{fpad}{g["id"]}[["{escape(g["name"])}"]]')
             out.append(f"{pad}end")
         for child in children.get(dom["id"], []):
             out.append("")
@@ -790,29 +755,12 @@ def render_call_graph(call_graph: dict) -> str:
         lines.extend(emit_domain(root, children, "    "))
         lines.append("")
 
-    # callee --> caller: every edge in this toolset points from the thing depended on
-    # to the thing depending on it, and a callee is a dependency of its caller. When
-    # the connection was mediated by one or more collapsed internal functions, they're
-    # named right on the edge label instead of appearing as nodes of their own.
-    # Labeled "returns" rather than "called by" -- this edge is really about what
-    # value flows up into the caller, which reads more naturally alongside the
-    # type-node routing below than a call-direction label would.
-    #
-    # If the callee is a first-emitter of some type (see extract_call_graph), this
-    # edge is rerouted through its type node instead of drawn directly -- the node
-    # itself already carries the fn-->type hop (below), so this is the type-->caller
-    # continuation: emitter -> Type -> caller. If the callee merely echoes a type some
-    # deeper descendant already originated (not itself a first-emitter), no node is
-    # inserted, but the edge is still colored for that type -- a plain pass-through
-    # continuing the same colored thread one hop further up the chain.
-    #
-    # (A literal reverse "calls" edge was tried here too, so each relationship showed
-    # both directions -- dropped again: mermaid's ELK integration routes a back-edge as
-    # an ugly loop around the outside of the nodes whenever the pair sits inside nested
-    # subgraphs, which every node in this graph always does (domain > file). Confirmed
-    # this is a subgraph-specific ELK/mermaid limitation, not fixable by edge order,
-    # labels, or the `mergeEdges` option -- see the graph module's history for the
-    # dead ends tried.)
+    # One bidirectional edge per (caller, callee) pair -- <--> puts an arrowhead on
+    # both ends, standing in for both "caller calls callee" and "callee's value
+    # returns to caller" without needing two separate directed edges (tried once, both
+    # as two "-->" edges and with an ELK cycle-breaking config to tame the 2-cycle
+    # that created between every pair -- more machinery than the relationship needs;
+    # see this function's git history if that's ever worth revisiting).
     #
     # call_graph["calls"] is in true source call order (see extract_call_graph) -- kept
     # that way since it's the semantically correct data. Emitted here in reverse,
@@ -820,58 +768,10 @@ def render_call_graph(call_graph: dict) -> str:
     # the opposite order from the order their edges were declared; reversing at this
     # rendering step (not in the data itself) compensates for that specific layout
     # quirk without making the underlying call_graph.json order lie about the source.
-    idx = 0
-    type_edge_indices: dict[str, list[int]] = {key: [] for key in type_color}
-
     for c in reversed(call_graph["calls"]):
         via = c.get("via") or []
-        label = "returns via " + ", ".join(via) if via else "returns"
-        emitted = emit_by_function.get(c["to"])
-        if emitted:
-            lines.append(f'    {emitted["id"]} -->|{label}| {c["from"]}')
-            type_edge_indices[emitted["type_key"]].append(idx)
-        else:
-            lines.append(f'    {c["to"]} -->|{label}| {c["from"]}')
-            passthrough_key = functions[c["to"]].get("emits_type_key")
-            if passthrough_key:
-                type_edge_indices[passthrough_key].append(idx)
-        idx += 1
-    lines.append("")
-
-    # A parameter node feeds into its function, same direction convention as
-    # everything else here: the thing depended on (the input) flows up to the thing
-    # depending on it (the function that receives it).
-    for param_id, fn_id in param_edges:
-        lines.append(f"    {param_id} --> {fn_id}")
-        idx += 1
-    lines.append("")
-
-    # A first-emitting function's own type: an undirected line (---), not an arrow --
-    # this is an association (this function's type is this), not a flow direction like
-    # every other edge here.
-    for fn_id, emit_id, type_key in emit_edges:
-        lines.append(f"    {fn_id} --- {emit_id}")
-        type_edge_indices[type_key].append(idx)
-        idx += 1
-    lines.append("")
-
-    # A re-exported function's marker node (in __init__.py's subgraph) traces back to
-    # where it's actually defined -- dashed, since this isn't a call relationship at
-    # all, just "this name is the same function as that one." Each re-export gets its
-    # own PALETTE color (same convention as domains/type groups), purely so multiple
-    # dashed lines stay visually distinguishable in a busy graph -- not tied to type.
-    reexports = [
-        de for de in call_graph.get("domain_exports", [])
-        if de["kind"] == "function" and de.get("real_id")
-    ]
-    reexport_color = {
-        de["id"]: PALETTE[i % len(PALETTE)] for i, de in enumerate(sorted(reexports, key=lambda d: d["id"]))
-    }
-    reexport_edge_indices: dict[str, int] = {}
-    for de in reexports:
-        lines.append(f'    {de["real_id"]} -.->|re-exports| {de["id"]}')
-        reexport_edge_indices[de["id"]] = idx
-        idx += 1
+        label = "calls / returns via " + ", ".join(via) if via else "calls / returns"
+        lines.append(f'    {c["to"]} <-->|{label}| {c["from"]}')
     lines.append("")
 
     palette_for_domain = {
@@ -883,7 +783,6 @@ def render_call_graph(call_graph: dict) -> str:
             f'    classDef {dom["id"]}Domain fill:{fill},stroke:{stroke},color:{color},stroke-width:1px;'
         )
     lines.append("    classDef fileGroup fill:none,stroke:#999999,stroke-width:1px,stroke-dasharray: 2 2;")
-    lines.append("    classDef paramNode fill:#fff3cd,stroke:#c9a227,color:#5c4a00,stroke-width:1px;")
     lines.append("")
 
     for dom in touched_domains:
@@ -891,8 +790,6 @@ def render_call_graph(call_graph: dict) -> str:
     file_ids_all = [fid for _, fid in file_entries]
     if file_ids_all:
         lines.append(f'    class {",".join(file_ids_all)} fileGroup')
-    if param_node_ids:
-        lines.append(f'    class {",".join(param_node_ids)} paramNode')
     lines.append("")
 
     for dom in touched_domains:
@@ -901,27 +798,294 @@ def render_call_graph(call_graph: dict) -> str:
         lines.append(f'    style {dom["id"]} fill:{tint},stroke:{fill},stroke-width:2px;')
     lines.append("")
 
-    for e in call_graph.get("emitted_types", []):
-        _, fill, stroke, color = type_color[e["type_key"]]
-        lines.append(f'    style {e["id"]} fill:{fill},stroke:{stroke},color:{color};')
-    for de in call_graph.get("domain_exports", []):
-        if de["kind"] != "type" or de.get("group_id"):
-            continue
-        _, fill, stroke, color = type_color[de["type_key"]]
-        lines.append(f'    style {de["id"]} fill:{fill},stroke:{stroke},color:{color};')
-    for g in call_graph.get("type_groups", []):
-        _, fill, stroke, color = type_color[g["id"]]
-        lines.append(f'    style {g["id"]} fill:{fill},stroke:{stroke},color:{color};')
-    lines.append("")
-
-    for type_key, indices in type_edge_indices.items():
-        if not indices:
-            continue
-        _, fill, _, _ = type_color[type_key]
-        lines.append(f'    linkStyle {",".join(str(i) for i in indices)} stroke:{fill},stroke-width:2px;')
-
-    for de_id, i in reexport_edge_indices.items():
-        _, fill, _, _ = reexport_color[de_id]
-        lines.append(f'    linkStyle {i} stroke:{fill},stroke-width:2px;')
-
     return "\n".join(lines) + "\n"
+
+
+def render_call_graph_html(call_graph: dict) -> str:
+    """mermaid + ELK layout (confirmed to render fine from a plain file://-opened page
+    -- see render_call_graph_html's prior revision for that test) plus a legend of
+    main types (extract_call_graph's main-type classification). Each main type gets
+    its own stable color (cycling PALETTE, same convention as domain coloring
+    elsewhere in this toolset) -- shown as the legend row's own dot, and used
+    uniformly on every node that touches that type once selected (constructs/returns/
+    accepts it directly, or only touches something it's transitively a component of --
+    see extract_call_graph's `highlights`). One color per type, not per kind: an
+    earlier revision colored by kind instead and quietly picked "constructs" as the
+    legend dot for nearly every type (whole-body construction scanning means a single
+    function assembling a nested literal, e.g. `Category(slots=[Slot(...) for ...])`,
+    legitimately constructs BOTH types at once, so "constructs" ends up present on
+    almost every type's highlight set) and colored a single selection's nodes
+    inconsistently (each touching function painted by ITS OWN kind, not the type's).
+    Neither reads as "this is type X, everywhere" at a glance, which is the actual
+    goal here -- so kind is no longer a color dimension at all.
+
+    Nothing dims when a type is selected -- the rest of the graph stays fully
+    readable as context around whatever's highlighted. Node lookup matches the
+    rendered SVG's `.node` elements by an `id*=` (contains) selector against our own
+    fn_id, rather than assuming a specific `flowchart-<id>-<n>` id format -- that
+    exact wrapping has drifted across mermaid versions, whereas embedding the
+    original id as a substring somewhere in the generated one has been stable;
+    contains-matching is safe here since a complete fn_id is only ever a substring of
+    another when they're the same node.
+
+    Edge direction (parameter vs. return) is drawn as a hand-rolled overlay, not by
+    touching mermaid's own edge paths: the base graph keeps its single bidirectional
+    `<-->` edge per caller/callee pair (see render_call_graph's docstring for why --
+    splitting that into two directed edges was tried once and reverted, it creates a
+    2-cycle at every pair that fights ELK's layout). Mermaid's rendered edge/marker
+    elements are exactly the kind of version-drifting internals the node-lookup
+    comment above already had to work around once; reaching for them a second time
+    for something as fiddly as per-direction arrowheads isn't worth it. Instead, on
+    selection, a small SVG `<g>` is appended on top of the rendered diagram with one
+    arrow per relevant produces/consumes edge (extract_call_graph's `produces` =
+    callee's return flows back to caller, `consumes` = caller's argument flows into
+    callee), positioned via `el.getBoundingClientRect()` mapped back into svgRoot's
+    coordinate system through `svgRoot.getScreenCTM().inverse()` -- real rendered
+    screen pixels, not `getBBox()`/`getCTM()`'s "clean" SVG geometry model, which was
+    tried first and placed arrows nowhere near the actual nodes (mermaid node labels
+    render through `<foreignObject>` HTML content, which that geometry model doesn't
+    reliably account for). getBoundingClientRect is immune to that: it reports
+    wherever the content actually painted, regardless of what mix of transforms or
+    foreignObject reflow produced it. A pair where the
+    type flows both ways gets two arrows, offset perpendicular to the line so they
+    don't overlap; direction is shown by arrowhead placement alone, same single color
+    as the type's node highlight -- no second color axis, consistent with why kind
+    stopped being a color dimension for nodes (see above).
+    """
+    mermaid_source = html.escape(render_call_graph(call_graph))
+    target = html.escape(call_graph.get("target", "call graph"))
+
+    sorted_types = sorted(call_graph.get("main_types", []), key=lambda t: t["name"])
+    main_types = []
+    for i, t in enumerate(sorted_types):
+        _, fill, stroke, text_color = PALETTE[i % len(PALETTE)]
+        main_types.append({
+            "type_key": t["type_key"], "name": t["name"], "highlights": t["highlights"],
+            "produces": t.get("produces", []), "consumes": t.get("consumes", []),
+            "fill": fill, "stroke": stroke, "text_color": text_color,
+        })
+    calls_min = [{"from": c["from"], "to": c["to"]} for c in call_graph.get("calls", [])]
+
+    template = """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>__TITLE__ -- call graph</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, Segoe UI, sans-serif; }
+  #app { display: flex; height: 100%; }
+  #legend { width: 260px; flex: none; overflow-y: auto; border-right: 1px solid #ccc; padding: 12px; box-sizing: border-box; }
+  #legend h2 { font-size: 14px; margin: 0 0 8px 0; }
+  #legend .clear-btn { display: block; width: 100%; margin-bottom: 10px; padding: 6px; cursor: pointer; }
+  #legend .type-row { padding: 6px 8px; cursor: pointer; border-radius: 4px; font-size: 13px; }
+  #legend .type-row:hover { background: #eee; }
+  #legend .type-row.selected { background: #dde; font-weight: 600; }
+  .type-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  #diagram { flex: 1; overflow: auto; padding: 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="legend">
+    <h2>__TITLE__</h2>
+    <button class="clear-btn" onclick="clearHighlight()">Clear selection</button>
+    <div id="type-list"></div>
+  </div>
+  <div id="diagram"></div>
+</div>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs";
+  import elkLayouts from "https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.3/dist/mermaid-layout-elk.esm.min.mjs";
+  mermaid.registerLayoutLoaders(elkLayouts);
+  mermaid.initialize({ startOnLoad: false, theme: "default" });
+
+  const mainTypes = __MAIN_TYPES_JSON__;
+  const calls = __CALLS_JSON__;
+  const mermaidSource = document.getElementById('mermaid-source').textContent;
+
+  const diagram = document.getElementById('diagram');
+  const { svg, bindFunctions } = await mermaid.render('graph-svg', mermaidSource);
+  diagram.innerHTML = svg;
+  if (bindFunctions) bindFunctions(diagram);
+  const svgRoot = diagram.querySelector('svg');
+
+  function findNode(id) {
+    // See this function's module docstring: contains-match, not a specific
+    // flowchart-<id>-<n> format assumption.
+    return svgRoot.querySelector('.node[id*="' + CSS.escape(id) + '"]');
+  }
+
+  // Shape/text tag names inside a mermaid node group aren't something this module
+  // can rely on across versions (rect for a plain box, but a stadium/rounded shape
+  // like ours can render as a path instead) -- rather than guess and chase a CSS
+  // selector that quietly matches nothing, this queries broadly for anything
+  // shape-like or text-like and sets the color via inline style with !important,
+  // which beats mermaid's own embedded <style> (inserted into the SVG, appearing
+  // AFTER this page's own stylesheet in the DOM, so a same-specificity !important
+  // rule there would otherwise win the cascade over an external stylesheet rule).
+  const SHAPE_SELECTOR = 'rect, polygon, circle, ellipse, path';
+  const TEXT_SELECTOR = '.nodeLabel, .nodeLabel *, tspan, text';
+
+  function paintNode(el, entry) {
+    el.querySelectorAll(SHAPE_SELECTOR).forEach(shape => {
+      shape.style.setProperty('fill', entry.fill, 'important');
+      shape.style.setProperty('stroke', entry.stroke, 'important');
+    });
+    el.querySelectorAll(TEXT_SELECTOR).forEach(t => {
+      t.style.setProperty('color', entry.text_color, 'important');
+      t.style.setProperty('fill', entry.text_color, 'important');
+    });
+  }
+
+  function unpaintNode(el) {
+    el.querySelectorAll(SHAPE_SELECTOR).forEach(shape => {
+      shape.style.removeProperty('fill');
+      shape.style.removeProperty('stroke');
+    });
+    el.querySelectorAll(TEXT_SELECTOR).forEach(t => {
+      t.style.removeProperty('color');
+      t.style.removeProperty('fill');
+    });
+  }
+
+  // Edge direction (parameter vs. return) is shown by directly restyling mermaid's
+  // own rendered edge <path>, not by drawing new geometry on top -- two earlier
+  // attempts (straight overlay lines, then hand-drawn orthogonal elbows guessing at
+  // ELK's routing) both looked visibly foreign next to the real edges. Confirmed by
+  // rendering a sample graph and inspecting the live DOM (see git history / session
+  // notes) that mermaid gives every edge a stable, matchable id and already carries
+  // exactly what's needed: `render_call_graph` emits each call as `{c.to} <-->
+  // |label| {c.from}` (reversed order, see that function's own docstring), and
+  // mermaid renders that as a <path id="...-L_{c.to}_{c.from}_0" ...> whose `d` is
+  // ELK's real computed route, with SEPARATE marker-start (arrowhead at the {c.to}
+  // end, i.e. the callee) and marker-end (arrowhead at the {c.from} end, i.e. the
+  // caller) attributes already on it. So: asParam (consumes) -> show marker-start
+  // (arrow into callee); asReturn (produces) -> show marker-end (arrow into caller);
+  // both -> show both, matching the default bidirectional look, just recolored. This
+  // reuses the actual route pixel-for-pixel and needs no node-position math at all.
+  let highlightedEdges = []; // {el, markerStart, markerEnd} snapshots, for clearHighlight to restore
+  const coloredMarkerCache = new Map(); // "baseMarkerId|color" -> cloned marker id
+
+  function findEdgePath(callFrom, callTo) {
+    return svgRoot.querySelector('path[id*="L_' + CSS.escape(callTo) + '_' + CSS.escape(callFrom) + '_"]');
+  }
+
+  function markerRefId(attrValue) {
+    if (!attrValue) return null;
+    const m = attrValue.match(/url\(["']?#([^"')]+)["']?\)/);
+    return m ? m[1] : null;
+  }
+
+  // mermaid's default arrowhead markers are shared by every edge (colored via a CSS
+  // class rule), so they can't be recolored in place without recoloring every edge's
+  // arrowhead. Instead, clone the specific marker this edge already references and
+  // recolor only the clone, cached by (base marker, color) since many edges share the
+  // same base marker and same type color.
+  function ensureColoredMarker(baseId, color) {
+    if (!baseId) return null;
+    const cacheKey = baseId + '|' + color;
+    if (coloredMarkerCache.has(cacheKey)) return coloredMarkerCache.get(cacheKey);
+    const base = document.getElementById(baseId);
+    if (!base) return null;
+    const clone = base.cloneNode(true);
+    const cloneId = 'hlmarker-' + coloredMarkerCache.size + '-' + color.replace('#', '');
+    clone.setAttribute('id', cloneId);
+    clone.querySelectorAll('path, circle, polygon').forEach(shape => {
+      shape.style.setProperty('fill', color, 'important');
+      shape.style.setProperty('stroke', color, 'important');
+    });
+    base.parentNode.appendChild(clone);
+    coloredMarkerCache.set(cacheKey, cloneId);
+    return cloneId;
+  }
+
+  function styleTypeFlowEdges(entry) {
+    const produces = new Set(entry.produces);
+    const consumes = new Set(entry.consumes);
+    for (const c of calls) {
+      const asParam = consumes.has(c.to);   // caller's argument flows into callee
+      const asReturn = produces.has(c.to);  // callee's return flows back to caller
+      if (!asParam && !asReturn) continue;
+      const edgeEl = findEdgePath(c.from, c.to);
+      if (!edgeEl) continue;
+
+      const origMarkerStart = edgeEl.getAttribute('marker-start');
+      const origMarkerEnd = edgeEl.getAttribute('marker-end');
+      highlightedEdges.push({ el: edgeEl, markerStart: origMarkerStart, markerEnd: origMarkerEnd });
+
+      edgeEl.classList.add('hl-edge');
+      edgeEl.style.setProperty('stroke', entry.fill, 'important');
+      edgeEl.style.setProperty('stroke-width', '3px', 'important');
+
+      if (asParam) {
+        const id = ensureColoredMarker(markerRefId(origMarkerStart), entry.fill);
+        edgeEl.setAttribute('marker-start', id ? 'url(#' + id + ')' : origMarkerStart || 'none');
+      } else {
+        edgeEl.setAttribute('marker-start', 'none');
+      }
+      if (asReturn) {
+        const id = ensureColoredMarker(markerRefId(origMarkerEnd), entry.fill);
+        edgeEl.setAttribute('marker-end', id ? 'url(#' + id + ')' : origMarkerEnd || 'none');
+      } else {
+        edgeEl.setAttribute('marker-end', 'none');
+      }
+    }
+  }
+
+  // Coloring, not dimming: a selected type colors every node that touches it, all in
+  // that ONE type's own color (see this function's docstring for why kind used to be
+  // a second color dimension and isn't anymore), and leaves everything else at its
+  // normal appearance -- the rest of the graph stays fully readable as context.
+  function clearHighlight() {
+    svgRoot.querySelectorAll('.node.hl').forEach(el => {
+      unpaintNode(el);
+      el.classList.remove('hl');
+    });
+    highlightedEdges.forEach(({ el, markerStart, markerEnd }) => {
+      el.classList.remove('hl-edge');
+      el.style.removeProperty('stroke');
+      el.style.removeProperty('stroke-width');
+      if (markerStart) el.setAttribute('marker-start', markerStart); else el.removeAttribute('marker-start');
+      if (markerEnd) el.setAttribute('marker-end', markerEnd); else el.removeAttribute('marker-end');
+    });
+    highlightedEdges = [];
+    document.querySelectorAll('#type-list .type-row').forEach(el => el.classList.remove('selected'));
+  }
+  window.clearHighlight = clearHighlight;
+
+  function highlightType(typeKey, rowEl) {
+    clearHighlight();
+    const entry = mainTypes.find(t => t.type_key === typeKey);
+    if (!entry) return;
+    rowEl.classList.add('selected');
+    for (const fid of Object.keys(entry.highlights)) {
+      const el = findNode(fid);
+      if (!el) continue;
+      el.classList.add('hl');
+      paintNode(el, entry);
+    }
+    styleTypeFlowEdges(entry);
+  }
+
+  const listEl = document.getElementById('type-list');
+  for (const t of mainTypes) {
+    const row = document.createElement('div');
+    row.className = 'type-row';
+    const dot = document.createElement('span');
+    dot.className = 'type-dot';
+    dot.style.background = t.fill;
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(t.name));
+    row.onclick = () => highlightType(t.type_key, row);
+    listEl.appendChild(row);
+  }
+</script>
+<pre id="mermaid-source" style="display:none">__MERMAID_SOURCE__</pre>
+</body>
+</html>
+"""
+    template = template.replace("__TITLE__", target)
+    template = template.replace("__MERMAID_SOURCE__", mermaid_source)
+    template = template.replace("__MAIN_TYPES_JSON__", json.dumps(main_types))
+    template = template.replace("__CALLS_JSON__", json.dumps(calls_min))
+    return template

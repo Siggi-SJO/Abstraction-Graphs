@@ -1,0 +1,59 @@
+---
+config:
+  layout: elk
+---
+graph LR
+
+subgraph doc_lifecycle["IngestedDocument"]
+    direction LR
+    doc_born(["born<br/>via ingest_docx()"])
+    doc_end{{"consumed<br/>by index_document()"}}
+    doc_born --> doc_end
+end
+
+subgraph idx_lifecycle["IndexedDocument"]
+    direction LR
+    idx_born(["born<br/>via index_document()"])
+    idx_mutated["mutated<br/>via embed_document()<br/>adds .embedding"]
+    idx_end{{"persisted<br/>via store_index()<br/>instance discarded"}}
+    idx_born --> idx_mutated --> idx_end
+end
+
+doc_end -.->|"handoff via index_document()"| idx_born
+
+subgraph cart_lifecycle["Cart"]
+    direction LR
+    cart_born(["born<br/>via create_cart()<br/>items: []"])
+    cart_add["mutated<br/>via add_item() x2<br/>items: 2"]
+    cart_discount["mutated<br/>via apply_discount()<br/>total recalculated"]
+    cart_decision{"checkout():<br/>payment ok?"}
+    cart_success{{"payment ok<br/>cart discarded"}}
+    cart_fail["payment failed<br/>cart retained"]
+    cart_born --> cart_add --> cart_discount --> cart_decision
+    cart_decision -->|yes| cart_success
+    cart_decision -->|no| cart_fail
+    cart_fail -.->|retry| cart_decision
+end
+
+order_stub["Order<br/>(own lifecycle, not expanded here)"]
+cart_success -.->|"handoff via checkout()"| order_stub
+
+classDef born fill:#1baf7a,stroke:#128257,color:#ffffff,stroke-width:1px;
+classDef mutated fill:#eaf2fc,stroke:#2a78d6,color:#1a1a1a,stroke-width:1px;
+classDef terminal fill:#2a78d6,stroke:#184f95,color:#ffffff,stroke-width:1px;
+classDef decision fill:#eda100,stroke:#a86c00,color:#1a1a1a,stroke-width:1px;
+classDef failed fill:#f6d9d9,stroke:#a3201f,color:#5c1414,stroke-width:1px;
+classDef stub fill:none,stroke:#8891a0,stroke-width:1px,stroke-dasharray: 3 3,color:#5c6675;
+
+class doc_born,idx_born,cart_born born;
+class idx_mutated,cart_add,cart_discount mutated;
+class doc_end,idx_end,cart_success terminal;
+class cart_decision decision;
+class cart_fail failed;
+class order_stub stub;
+
+linkStyle 0,1,2,4,5,6 stroke:#333844,stroke-width:1.5px;
+linkStyle 7 stroke:#128257,stroke-width:2px;
+linkStyle 8 stroke:#a3201f,stroke-width:2px;
+linkStyle 9 stroke:#8891a0,stroke-width:1px;
+linkStyle 3,10 stroke:#4a3aa7,stroke-width:2px;

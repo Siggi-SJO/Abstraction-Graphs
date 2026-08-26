@@ -31,7 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from extract import extract, find_domains_in_tree, hash_files, own_direct_files  # noqa: E402
 from render import render  # noqa: E402
-from call_graph import extract_call_graph, render_call_graph  # noqa: E402
+from call_graph import extract_call_graph, render_call_graph, render_call_graph_html  # noqa: E402
 
 from mcp.server import MCPServer  # noqa: E402
 
@@ -42,6 +42,7 @@ GRAPH_JSON = "dependency_graph.json"
 GRAPH_MERMAID = "dependency_graph.mermaid"
 CALL_GRAPH_JSON = "call_graph.json"
 CALL_GRAPH_MERMAID = "call_graph.mermaid"
+CALL_GRAPH_HTML = "call_graph.html"
 
 CLUSTER_PROMPT = """For each Python module below, you're given its exported type names (classes, type \
 aliases, enums -- not functions). For each module, produce ONE line clustering those \
@@ -166,14 +167,23 @@ def trim_for_persistence(extracted: dict, target_dotted: str) -> dict:
 
 
 def generate_one(
-    repo_root: Path, domain_dir: Path, clusters_full: dict[str, str], do_reverse_scan: bool = True
+    repo_root: Path, domain_dir: Path, clusters_full: dict[str, str], do_reverse_scan: bool = True,
+    force: bool = False,
 ) -> dict:
-    """Regenerate one domain's own dependency_graph/ files. `clusters_full` accumulates
-    every cluster string produced or reused this run, keyed by dotted path, so later
-    domains in the same run (and future runs) can reuse rather than re-ask Ollama.
-    `do_reverse_scan` is False for a domain pulled in as a boundary dependency or
-    importer -- only the originally-requested target and its own submodules get "who
-    imports me" treatment, so the reverse scan doesn't recurse upward without bound."""
+    """Regenerate one domain's own dependency_graph/ files -- always: extract() is
+    cheap/local (no network) and render()/render_call_graph()/render_call_graph_html()
+    are pure Python, so this runs on every call, changed or not, and a rendering code
+    change always shows up on the next regen without needing `force`. `clusters_full`
+    accumulates every cluster string produced or reused this run, keyed by dotted
+    path, so later domains in the same run (and future runs, via each domain's own
+    cached types_cluster) can reuse rather than re-ask Ollama for an unchanged type
+    list -- the one thing here that's actually expensive. `force` bypasses that reuse
+    too, asking Ollama again even when a domain's types_raw is byte-identical to what's
+    cached; use it if the clustering itself needs redoing (e.g. CLUSTER_PROMPT
+    changed), not for an ordinary "did anything change" regen. `do_reverse_scan` is
+    False for a domain pulled in as a boundary dependency or importer -- only the
+    originally-requested target and its own submodules get "who imports me" treatment,
+    so the reverse scan doesn't recurse upward without bound."""
     extracted = extract(repo_root, domain_dir, do_reverse_scan=do_reverse_scan)
     target_dotted = extracted["target"]
 
@@ -182,8 +192,10 @@ def generate_one(
         if not dom["types_raw"]:
             continue
         if dom["dotted"] in clusters_full:
-            continue  # already have a cluster string for this exact domain this run
-        cached = load_cached(Path(repo_root, *dom["dotted"].split(".")))
+            continue  # already have a cluster string for this exact domain this run -- reused
+            # regardless of `force`, since re-asking Ollama twice for the identical
+            # input within the same run has no benefit
+        cached = None if force else load_cached(Path(repo_root, *dom["dotted"].split(".")))
         if cached and cached.get("types_raw") == dom["types_raw"] and cached.get("types_cluster"):
             clusters_full[dom["dotted"]] = cached["types_cluster"]
             continue
@@ -202,6 +214,7 @@ def generate_one(
 
     call_graph = extract_call_graph(repo_root, extracted)
     call_graph_mermaid = render_call_graph(call_graph)
+    call_graph_html = render_call_graph_html(call_graph)
 
     out_dir = domain_dir / GRAPH_DIRNAME
     out_dir.mkdir(exist_ok=True)
@@ -209,6 +222,7 @@ def generate_one(
     (out_dir / GRAPH_MERMAID).write_text(mermaid)
     (out_dir / CALL_GRAPH_JSON).write_text(json.dumps(call_graph, indent=2))
     (out_dir / CALL_GRAPH_MERMAID).write_text(call_graph_mermaid)
+    (out_dir / CALL_GRAPH_HTML).write_text(call_graph_html)
 
     return {
         "dotted": target_dotted,
@@ -290,35 +304,39 @@ def _generate_dependency_graph(target: str, repo_root: str = "be", force: bool =
             own_hash = hash_files(own_direct_files(dom.dir_path))
             cached = load_cached(dom.dir_path)
             unchanged = (
-                not force
-                and cached is not None
+                cached is not None
                 and cached.get("own_content_hash") == own_hash
                 and not has_regenerated_child
                 and cached.get("reverse_scan_applied") == root_do_reverse
             )
-            if unchanged:
-                report_lines.append(f"- {dom.dotted}: unchanged, skipped")
-                domains_seen = cached.get("domains", [])
-            else:
-                try:
-                    result = generate_one(
-                        repo_root_path, dom.dir_path, clusters_full, do_reverse_scan=root_do_reverse
-                    )
-                except Exception as e:
-                    report_lines.append(f"- {dom.dotted}: ERROR: {e}")
-                    continue
-                regenerated.add(dom.dir_path)
-                note = f"- {dom.dotted}: regenerated ({result['domain_count']} domains in view)"
-                if result["broken"]:
-                    note += "; broken: " + "; ".join(
-                        f"{b['importer']}->{b['dotted']}" for b in result["broken"]
-                    )
-                if result["violations"]:
-                    note += "; violations: " + "; ".join(
-                        f"{v['from']}->{v['to']}" for v in result["violations"]
-                    )
-                report_lines.append(note)
-                domains_seen = result["domains"]
+            # generate_one() always runs, changed or not -- extract() is cheap/local
+            # (no network), and re-rendering .mermaid/.html from it means a rendering
+            # code change (call_graph.py, render.py) always shows up on the next
+            # regen, without needing --force. --force only still matters for the one
+            # thing that's genuinely expensive: it's passed through as `force` here so
+            # a truly UNCHANGED domain's types_raw still short-circuits the Ollama
+            # clustering call inside generate_one() regardless -- only `force` bypasses
+            # that reuse too and asks Ollama again even when types_raw is identical.
+            try:
+                result = generate_one(
+                    repo_root_path, dom.dir_path, clusters_full, do_reverse_scan=root_do_reverse, force=force
+                )
+            except Exception as e:
+                report_lines.append(f"- {dom.dotted}: ERROR: {e}")
+                continue
+            regenerated.add(dom.dir_path)
+            status = "regenerated" if not unchanged else "up to date, re-rendered"
+            note = f"- {dom.dotted}: {status} ({result['domain_count']} domains in view)"
+            if result["broken"]:
+                note += "; broken: " + "; ".join(
+                    f"{b['importer']}->{b['dotted']}" for b in result["broken"]
+                )
+            if result["violations"]:
+                note += "; violations: " + "; ".join(
+                    f"{v['from']}->{v['to']}" for v in result["violations"]
+                )
+            report_lines.append(note)
+            domains_seen = result["domains"]
 
             for root_dotted in external_boundary_roots(domains_seen):
                 root_path = repo_root_path / Path(*root_dotted.split("."))
