@@ -1,0 +1,227 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>python -- call graph</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: -apple-system, Segoe UI, sans-serif; }
+  #app { display: flex; height: 100%; }
+  #legend { width: 260px; flex: none; overflow-y: auto; border-right: 1px solid #ccc; padding: 12px; box-sizing: border-box; }
+  #legend h2 { font-size: 14px; margin: 0 0 8px 0; }
+  #legend .clear-btn { display: block; width: 100%; margin-bottom: 10px; padding: 6px; cursor: pointer; }
+  #legend .type-row { padding: 6px 8px; cursor: pointer; border-radius: 4px; font-size: 13px; }
+  #legend .type-row:hover { background: #eee; }
+  #legend .type-row.selected { background: #dde; font-weight: 600; }
+  .type-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  #diagram { flex: 1; overflow: auto; padding: 12px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="legend">
+    <h2>python</h2>
+    <button class="clear-btn" onclick="clearHighlight()">Clear selection</button>
+    <div id="type-list"></div>
+  </div>
+  <div id="diagram"></div>
+</div>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs";
+  import elkLayouts from "https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk@0.2.3/dist/mermaid-layout-elk.esm.min.mjs";
+  mermaid.registerLayoutLoaders(elkLayouts);
+  mermaid.initialize({ startOnLoad: false, theme: "default" });
+
+  const mainTypes = [];
+  const calls = [];
+  const mermaidSource = document.getElementById('mermaid-source').textContent;
+
+  const diagram = document.getElementById('diagram');
+  const { svg, bindFunctions } = await mermaid.render('graph-svg', mermaidSource);
+  diagram.innerHTML = svg;
+  if (bindFunctions) bindFunctions(diagram);
+  const svgRoot = diagram.querySelector('svg');
+
+  function findNode(id) {
+    // See this function's module docstring: contains-match, not a specific
+    // flowchart-<id>-<n> format assumption.
+    return svgRoot.querySelector('.node[id*="' + CSS.escape(id) + '"]');
+  }
+
+  // Shape/text tag names inside a mermaid node group aren't something this module
+  // can rely on across versions (rect for a plain box, but a stadium/rounded shape
+  // like ours can render as a path instead) -- rather than guess and chase a CSS
+  // selector that quietly matches nothing, this queries broadly for anything
+  // shape-like or text-like and sets the color via inline style with !important,
+  // which beats mermaid's own embedded <style> (inserted into the SVG, appearing
+  // AFTER this page's own stylesheet in the DOM, so a same-specificity !important
+  // rule there would otherwise win the cascade over an external stylesheet rule).
+  const SHAPE_SELECTOR = 'rect, polygon, circle, ellipse, path';
+  const TEXT_SELECTOR = '.nodeLabel, .nodeLabel *, tspan, text';
+
+  function paintNode(el, entry) {
+    el.querySelectorAll(SHAPE_SELECTOR).forEach(shape => {
+      shape.style.setProperty('fill', entry.fill, 'important');
+      shape.style.setProperty('stroke', entry.stroke, 'important');
+    });
+    el.querySelectorAll(TEXT_SELECTOR).forEach(t => {
+      t.style.setProperty('color', entry.text_color, 'important');
+      t.style.setProperty('fill', entry.text_color, 'important');
+    });
+  }
+
+  function unpaintNode(el) {
+    el.querySelectorAll(SHAPE_SELECTOR).forEach(shape => {
+      shape.style.removeProperty('fill');
+      shape.style.removeProperty('stroke');
+    });
+    el.querySelectorAll(TEXT_SELECTOR).forEach(t => {
+      t.style.removeProperty('color');
+      t.style.removeProperty('fill');
+    });
+  }
+
+  // Edge direction (parameter vs. return) is shown by directly restyling mermaid's
+  // own rendered edge <path>, not by drawing new geometry on top -- two earlier
+  // attempts (straight overlay lines, then hand-drawn orthogonal elbows guessing at
+  // ELK's routing) both looked visibly foreign next to the real edges. Confirmed by
+  // rendering a sample graph and inspecting the live DOM (see git history / session
+  // notes) that mermaid gives every edge a stable, matchable id and already carries
+  // exactly what's needed: `render_call_graph` emits each call as `{c.to} <-->
+  // |label| {c.from}` (reversed order, see that function's own docstring), and
+  // mermaid renders that as a <path id="...-L_{c.to}_{c.from}_0" ...> whose `d` is
+  // ELK's real computed route, with SEPARATE marker-start (arrowhead at the {c.to}
+  // end, i.e. the callee) and marker-end (arrowhead at the {c.from} end, i.e. the
+  // caller) attributes already on it. So: asParam (consumes) -> show marker-start
+  // (arrow into callee); asReturn (produces) -> show marker-end (arrow into caller);
+  // both -> show both, matching the default bidirectional look, just recolored. This
+  // reuses the actual route pixel-for-pixel and needs no node-position math at all.
+  let highlightedEdges = []; // {el, markerStart, markerEnd} snapshots, for clearHighlight to restore
+  const coloredMarkerCache = new Map(); // "baseMarkerId|color" -> cloned marker id
+
+  function findEdgePath(callFrom, callTo) {
+    return svgRoot.querySelector('path[id*="L_' + CSS.escape(callTo) + '_' + CSS.escape(callFrom) + '_"]');
+  }
+
+  function markerRefId(attrValue) {
+    if (!attrValue) return null;
+    const m = attrValue.match(/url\(["']?#([^"')]+)["']?\)/);
+    return m ? m[1] : null;
+  }
+
+  // mermaid's default arrowhead markers are shared by every edge (colored via a CSS
+  // class rule), so they can't be recolored in place without recoloring every edge's
+  // arrowhead. Instead, clone the specific marker this edge already references and
+  // recolor only the clone, cached by (base marker, color) since many edges share the
+  // same base marker and same type color.
+  function ensureColoredMarker(baseId, color) {
+    if (!baseId) return null;
+    const cacheKey = baseId + '|' + color;
+    if (coloredMarkerCache.has(cacheKey)) return coloredMarkerCache.get(cacheKey);
+    const base = document.getElementById(baseId);
+    if (!base) return null;
+    const clone = base.cloneNode(true);
+    const cloneId = 'hlmarker-' + coloredMarkerCache.size + '-' + color.replace('#', '');
+    clone.setAttribute('id', cloneId);
+    clone.querySelectorAll('path, circle, polygon').forEach(shape => {
+      shape.style.setProperty('fill', color, 'important');
+      shape.style.setProperty('stroke', color, 'important');
+    });
+    base.parentNode.appendChild(clone);
+    coloredMarkerCache.set(cacheKey, cloneId);
+    return cloneId;
+  }
+
+  function styleTypeFlowEdges(entry) {
+    const produces = new Set(entry.produces);
+    const consumes = new Set(entry.consumes);
+    for (const c of calls) {
+      const asParam = consumes.has(c.to);   // caller's argument flows into callee
+      const asReturn = produces.has(c.to);  // callee's return flows back to caller
+      if (!asParam && !asReturn) continue;
+      const edgeEl = findEdgePath(c.from, c.to);
+      if (!edgeEl) continue;
+
+      const origMarkerStart = edgeEl.getAttribute('marker-start');
+      const origMarkerEnd = edgeEl.getAttribute('marker-end');
+      highlightedEdges.push({ el: edgeEl, markerStart: origMarkerStart, markerEnd: origMarkerEnd });
+
+      edgeEl.classList.add('hl-edge');
+      edgeEl.style.setProperty('stroke', entry.fill, 'important');
+      edgeEl.style.setProperty('stroke-width', '3px', 'important');
+
+      if (asParam) {
+        const id = ensureColoredMarker(markerRefId(origMarkerStart), entry.fill);
+        edgeEl.setAttribute('marker-start', id ? 'url(#' + id + ')' : origMarkerStart || 'none');
+      } else {
+        edgeEl.setAttribute('marker-start', 'none');
+      }
+      if (asReturn) {
+        const id = ensureColoredMarker(markerRefId(origMarkerEnd), entry.fill);
+        edgeEl.setAttribute('marker-end', id ? 'url(#' + id + ')' : origMarkerEnd || 'none');
+      } else {
+        edgeEl.setAttribute('marker-end', 'none');
+      }
+    }
+  }
+
+  // Coloring, not dimming: a selected type colors every node that touches it, all in
+  // that ONE type's own color (see this function's docstring for why kind used to be
+  // a second color dimension and isn't anymore), and leaves everything else at its
+  // normal appearance -- the rest of the graph stays fully readable as context.
+  function clearHighlight() {
+    svgRoot.querySelectorAll('.node.hl').forEach(el => {
+      unpaintNode(el);
+      el.classList.remove('hl');
+    });
+    highlightedEdges.forEach(({ el, markerStart, markerEnd }) => {
+      el.classList.remove('hl-edge');
+      el.style.removeProperty('stroke');
+      el.style.removeProperty('stroke-width');
+      if (markerStart) el.setAttribute('marker-start', markerStart); else el.removeAttribute('marker-start');
+      if (markerEnd) el.setAttribute('marker-end', markerEnd); else el.removeAttribute('marker-end');
+    });
+    highlightedEdges = [];
+    document.querySelectorAll('#type-list .type-row').forEach(el => el.classList.remove('selected'));
+  }
+  window.clearHighlight = clearHighlight;
+
+  function highlightType(typeKey, rowEl) {
+    clearHighlight();
+    const entry = mainTypes.find(t => t.type_key === typeKey);
+    if (!entry) return;
+    rowEl.classList.add('selected');
+    for (const fid of Object.keys(entry.highlights)) {
+      const el = findNode(fid);
+      if (!el) continue;
+      el.classList.add('hl');
+      paintNode(el, entry);
+    }
+    styleTypeFlowEdges(entry);
+  }
+
+  const listEl = document.getElementById('type-list');
+  for (const t of mainTypes) {
+    const row = document.createElement('div');
+    row.className = 'type-row';
+    const dot = document.createElement('span');
+    dot.className = 'type-dot';
+    dot.style.background = t.fill;
+    row.appendChild(dot);
+    row.appendChild(document.createTextNode(t.name));
+    row.onclick = () => highlightType(t.type_key, row);
+    listEl.appendChild(row);
+  }
+</script>
+<pre id="mermaid-source" style="display:none">---
+config:
+  layout: elk
+---
+graph BT
+
+    classDef fileGroup fill:none,stroke:#999999,stroke-width:1px,stroke-dasharray: 2 2;
+
+
+
+</pre>
+</body>
+</html>

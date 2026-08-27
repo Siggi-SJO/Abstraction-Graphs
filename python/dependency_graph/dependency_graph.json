@@ -1,0 +1,49 @@
+{
+  "target": "python",
+  "color_order": [
+    "python"
+  ],
+  "domains": [
+    {
+      "dotted": "python",
+      "id": "python",
+      "in_tree": true,
+      "files": [
+        {
+          "id": "python___init__",
+          "filename": "__init__.py",
+          "relpath": "__init__.py"
+        },
+        {
+          "id": "python_call_graph",
+          "filename": "call_graph.py",
+          "relpath": "call_graph.py"
+        },
+        {
+          "id": "python_extract",
+          "filename": "extract.py",
+          "relpath": "extract.py"
+        },
+        {
+          "id": "python_render",
+          "filename": "render.py",
+          "relpath": "render.py"
+        },
+        {
+          "id": "python_server",
+          "filename": "server.py",
+          "relpath": "server.py"
+        }
+      ],
+      "functions": [],
+      "types_raw": []
+    }
+  ],
+  "standalone_files": [],
+  "broken": [],
+  "violations": [],
+  "edges": [],
+  "own_content_hash": "f7e931205b69909c4a3cd3b850ac18dc64903eeaa390e747df30eba39e8b22bd",
+  "reverse_scan_applied": true,
+  "types_cluster": null
+}

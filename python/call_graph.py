@@ -972,7 +972,7 @@ def render_call_graph_html(call_graph: dict) -> str:
 
   function markerRefId(attrValue) {
     if (!attrValue) return null;
-    const m = attrValue.match(/url\(["']?#([^"')]+)["']?\)/);
+    const m = attrValue.match(/url\\(["']?#([^"')]+)["']?\\)/);
     return m ? m[1] : null;
   }
 

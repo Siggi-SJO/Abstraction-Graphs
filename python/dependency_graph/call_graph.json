@@ -1,0 +1,13 @@
+{
+  "target": "python",
+  "domains": [
+    {
+      "dotted": "python",
+      "id": "python",
+      "in_tree": true
+    }
+  ],
+  "functions": [],
+  "calls": [],
+  "main_types": []
+}
