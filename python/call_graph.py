@@ -28,6 +28,7 @@ from pathlib import Path
 
 from extract import dotted_path, file_node_id, parse_imports, resolve_target, sibling_dotted
 from render import PALETTE, build_forest, light_tint
+from models import CallDomain, CallEdge, CallGraph, ExtractedGraph, FunctionInfo, TypeHighlight
 
 
 def _is_internal(qualname: str) -> bool:
@@ -347,7 +348,7 @@ def resolve_function_definition(
     return None
 
 
-def extract_call_graph(repo_root: Path, extracted: dict) -> dict:
+def extract_call_graph(repo_root: Path, extracted: ExtractedGraph) -> CallGraph:
     dom_dirs = [(dom, Path(repo_root, *dom["dotted"].split("."))) for dom in extracted["domains"]]
 
     all_functions: dict[str, dict] = {}
@@ -719,7 +720,7 @@ def extract_call_graph(repo_root: Path, extracted: dict) -> dict:
     }
 
 
-def render_call_graph(call_graph: dict) -> str:
+def render_call_graph(call_graph: CallGraph) -> str:
     functions = {f["id"]: f for f in call_graph["functions"]}
 
     file_entries: dict[tuple[str, str], dict] = {}
@@ -813,7 +814,7 @@ def render_call_graph(call_graph: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_call_graph_html(call_graph: dict) -> str:
+def render_call_graph_html(call_graph: CallGraph) -> str:
     """mermaid + ELK layout (confirmed to render fine from a plain file://-opened page
     -- see render_call_graph_html's prior revision for that test) plus a legend of
     main types (extract_call_graph's main-type classification). Each main type gets
@@ -930,7 +931,7 @@ def render_call_graph_html(call_graph: dict) -> str:
   svgRoot.style.display = 'block';
   svgRoot.style.cursor = 'grab';
 
-  const _vb = (svgRoot.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  const _vb = (svgRoot.getAttribute('viewBox') || '').trim().split(/[\\s,]+/).map(Number);
   let vbX = _vb[0] || 0, vbY = _vb[1] || 0;
   let vbW = _vb[2] || parseFloat(svgRoot.getAttribute('width') || '800');
   let vbH = _vb[3] || parseFloat(svgRoot.getAttribute('height') || '600');

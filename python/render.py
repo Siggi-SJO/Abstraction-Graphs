@@ -9,6 +9,8 @@ import argparse
 import json
 from pathlib import Path
 
+from models import DomainInfo, ExtractedGraph
+
 PALETTE = [
     ("blue", "#2a78d6", "#184f95", "#ffffff"),
     ("orange", "#eb6834", "#a84e1f", "#1a1a1a"),
@@ -31,7 +33,7 @@ def light_tint(hex_fill: str) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def build_forest(domain_list: list[dict]) -> tuple[list[dict], dict[str, list[dict]]]:
+def build_forest(domain_list: list[DomainInfo]) -> tuple[list[DomainInfo], dict[str, list[DomainInfo]]]:
     """Nest by dotted-path containment within `domain_list` only -- used both for
     the target's own in-tree domains and, separately, for each external boundary
     domain's own sub-tree (e.g. services.storage.backends inside services.storage
@@ -60,7 +62,7 @@ def build_forest(domain_list: list[dict]) -> tuple[list[dict], dict[str, list[di
     return roots, children
 
 
-def render(extracted: dict, clusters: dict[str, str]) -> str:
+def render(extracted: ExtractedGraph, clusters: dict[str, str]) -> str:
     lines = ["---", "config:", "  layout: elk", "---", "graph BT"]
     palette_for = {
         dom["id"]: PALETTE[i % len(PALETTE)] for i, dom in enumerate(extracted["domains"])

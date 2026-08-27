@@ -16,6 +16,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from models import ExtractedGraph
+
 EXCLUDE_DIR_NAMES = {
     "tests",
     "test_scripts",
@@ -319,7 +321,7 @@ def process_domain_exports(repo_root: Path, domain: Domain, symbol_cache: dict) 
                 domain.init_internal_edges.append(candidate)
 
 
-def extract(repo_root: Path, target_dir: Path, do_reverse_scan: bool = True) -> dict:
+def extract(repo_root: Path, target_dir: Path, do_reverse_scan: bool = True) -> ExtractedGraph:
     target_dotted = dotted_path(repo_root, target_dir / "__init__.py")
     assert is_domain_dir(target_dir), f"{target_dir} has no __init__.py — not a domain"
 

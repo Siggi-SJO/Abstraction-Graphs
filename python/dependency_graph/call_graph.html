@@ -13,8 +13,7 @@
   #legend .type-row:hover { background: #eee; }
   #legend .type-row.selected { background: #dde; font-weight: 600; }
   .type-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-  #diagram { flex: 1; overflow: auto; padding: 12px; cursor: grab; }
-  #diagram svg { max-width: none !important; display: block; }
+  #diagram { flex: 1; overflow: hidden; padding: 12px; }
 </style>
 </head>
 <body>
@@ -41,6 +40,49 @@
   diagram.innerHTML = svg;
   if (bindFunctions) bindFunctions(diagram);
   const svgRoot = diagram.querySelector('svg');
+
+  // Pan and zoom via viewBox manipulation. mermaid injects inline max-width/height
+  // on the SVG; override them so the SVG fills the container, then shift/scale the
+  // viewBox on wheel (zoom toward cursor) and mousedown+drag (pan).
+  svgRoot.style.maxWidth = 'none';
+  svgRoot.style.width = '100%';
+  svgRoot.style.height = '100%';
+  svgRoot.style.display = 'block';
+  svgRoot.style.cursor = 'grab';
+
+  const _vb = (svgRoot.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  let vbX = _vb[0] || 0, vbY = _vb[1] || 0;
+  let vbW = _vb[2] || parseFloat(svgRoot.getAttribute('width') || '800');
+  let vbH = _vb[3] || parseFloat(svgRoot.getAttribute('height') || '600');
+  function applyVB() { svgRoot.setAttribute('viewBox', `${vbX} ${vbY} ${vbW} ${vbH}`); }
+
+  diagram.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = svgRoot.getBoundingClientRect();
+    const factor = e.deltaY > 0 ? 1.1 : 0.9;
+    const mx = vbX + (e.clientX - rect.left) / rect.width * vbW;
+    const my = vbY + (e.clientY - rect.top) / rect.height * vbH;
+    vbW *= factor; vbH *= factor;
+    vbX = mx - (e.clientX - rect.left) / rect.width * vbW;
+    vbY = my - (e.clientY - rect.top) / rect.height * vbH;
+    applyVB();
+  }, { passive: false });
+
+  let panning = false, panCX, panCY, panVbX, panVbY;
+  svgRoot.addEventListener('mousedown', e => {
+    panning = true; panCX = e.clientX; panCY = e.clientY; panVbX = vbX; panVbY = vbY;
+    svgRoot.style.cursor = 'grabbing'; e.preventDefault();
+  });
+  window.addEventListener('mousemove', e => {
+    if (!panning) return;
+    const rect = svgRoot.getBoundingClientRect();
+    vbX = panVbX - (e.clientX - panCX) / rect.width * vbW;
+    vbY = panVbY - (e.clientY - panCY) / rect.height * vbH;
+    applyVB();
+  });
+  window.addEventListener('mouseup', () => {
+    if (panning) { panning = false; svgRoot.style.cursor = 'grab'; }
+  });
 
   function findNode(id) {
     // See this function's module docstring: contains-match, not a specific
