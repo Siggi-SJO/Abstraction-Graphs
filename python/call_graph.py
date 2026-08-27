@@ -893,7 +893,8 @@ def render_call_graph_html(call_graph: dict) -> str:
   #legend .type-row:hover { background: #eee; }
   #legend .type-row.selected { background: #dde; font-weight: 600; }
   .type-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
-  #diagram { flex: 1; overflow: auto; padding: 12px; }
+  #diagram { flex: 1; overflow: auto; padding: 12px; cursor: grab; }
+  #diagram svg { max-width: none !important; display: block; }
 </style>
 </head>
 <body>

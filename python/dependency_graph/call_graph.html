@@ -32,7 +32,7 @@
   mermaid.initialize({ startOnLoad: false, theme: "default" });
 
   const mainTypes = [];
-  const calls = [];
+  const calls = [{"from": "python_call_graph_fn_extract_call_graph", "to": "python_extract_fn_dotted_path"}, {"from": "python_call_graph_fn_extract_call_graph", "to": "python_call_graph_fn_resolve_type_definition"}, {"from": "python_call_graph_fn_extract_call_graph", "to": "python_call_graph_fn_resolve_function_definition"}, {"from": "python_call_graph_fn_extract_call_graph", "to": "python_extract_fn_file_node_id"}, {"from": "python_call_graph_fn_render_call_graph", "to": "python_render_fn_build_forest"}, {"from": "python_call_graph_fn_render_call_graph", "to": "python_render_fn_light_tint"}, {"from": "python_call_graph_fn_render_call_graph_html", "to": "python_call_graph_fn_render_call_graph"}, {"from": "python_call_graph_fn_resolve_function_definition", "to": "python_extract_fn_parse_imports"}, {"from": "python_call_graph_fn_resolve_function_definition", "to": "python_extract_fn_resolve_target"}, {"from": "python_call_graph_fn_resolve_function_definition", "to": "python_extract_fn_sibling_dotted"}, {"from": "python_call_graph_fn_resolve_type_definition", "to": "python_extract_fn_parse_imports"}, {"from": "python_call_graph_fn_resolve_type_definition", "to": "python_extract_fn_resolve_target"}, {"from": "python_call_graph_fn_resolve_type_definition", "to": "python_extract_fn_sibling_dotted"}, {"from": "python_extract_fn_extract", "to": "python_extract_fn_dotted_path"}, {"from": "python_extract_fn_extract", "to": "python_extract_fn_find_domains_in_tree"}, {"from": "python_extract_fn_extract", "to": "python_extract_fn_resolve_target"}, {"from": "python_extract_fn_extract", "to": "python_extract_fn_file_node_id"}, {"from": "python_extract_fn_extract", "to": "python_extract_fn_parse_imports"}, {"from": "python_extract_fn_extract", "to": "python_extract_fn_sibling_dotted"}, {"from": "python_extract_fn_file_node_id", "to": "python_extract_fn_dotted_path"}, {"from": "python_extract_fn_find_domains_in_tree", "to": "python_extract_fn_dotted_path"}, {"from": "python_extract_fn_sibling_dotted", "to": "python_extract_fn_dotted_path"}, {"from": "python_render_fn_render", "to": "python_render_fn_build_forest"}, {"from": "python_render_fn_render", "to": "python_render_fn_light_tint"}, {"from": "python_server_fn_generate_dependency_graph", "to": "python_extract_fn_find_domains_in_tree"}, {"from": "python_server_fn_generate_dependency_graph", "to": "python_extract_fn_hash_files"}, {"from": "python_server_fn_generate_dependency_graph", "to": "python_extract_fn_own_direct_files"}, {"from": "python_server_fn_generate_dependency_graph", "to": "python_server_fn_generate_one"}, {"from": "python_server_fn_generate_one", "to": "python_extract_fn_extract"}, {"from": "python_server_fn_generate_one", "to": "python_render_fn_render"}, {"from": "python_server_fn_generate_one", "to": "python_extract_fn_own_direct_files"}, {"from": "python_server_fn_generate_one", "to": "python_extract_fn_hash_files"}, {"from": "python_server_fn_generate_one", "to": "python_call_graph_fn_extract_call_graph"}, {"from": "python_server_fn_generate_one", "to": "python_call_graph_fn_render_call_graph"}, {"from": "python_server_fn_generate_one", "to": "python_call_graph_fn_render_call_graph_html"}, {"from": "python_server_fn_main", "to": "python_extract_fn_find_domains_in_tree"}, {"from": "python_server_fn_main", "to": "python_extract_fn_hash_files"}, {"from": "python_server_fn_main", "to": "python_extract_fn_own_direct_files"}, {"from": "python_server_fn_main", "to": "python_server_fn_generate_one"}];
   const mermaidSource = document.getElementById('mermaid-source').textContent;
 
   const diagram = document.getElementById('diagram');
@@ -217,10 +217,84 @@ config:
   layout: elk
 ---
 graph BT
+    subgraph python[&quot;python&quot;]
+        subgraph python_call_graph[&quot;call_graph.py&quot;]
+            python_call_graph_fn_extract_call_graph([&quot;extract_call_graph&quot;])
+            python_call_graph_fn_render_call_graph([&quot;render_call_graph&quot;])
+            python_call_graph_fn_render_call_graph_html([&quot;render_call_graph_html&quot;])
+            python_call_graph_fn_resolve_function_definition([&quot;resolve_function_definition&quot;])
+            python_call_graph_fn_resolve_type_definition([&quot;resolve_type_definition&quot;])
+        end
+        subgraph python_extract[&quot;extract.py&quot;]
+            python_extract_fn_dotted_path([&quot;dotted_path&quot;])
+            python_extract_fn_extract([&quot;extract&quot;])
+            python_extract_fn_file_node_id([&quot;file_node_id&quot;])
+            python_extract_fn_find_domains_in_tree([&quot;find_domains_in_tree&quot;])
+            python_extract_fn_hash_files([&quot;hash_files&quot;])
+            python_extract_fn_own_direct_files([&quot;own_direct_files&quot;])
+            python_extract_fn_parse_imports([&quot;parse_imports&quot;])
+            python_extract_fn_resolve_target([&quot;resolve_target&quot;])
+            python_extract_fn_sibling_dotted([&quot;sibling_dotted&quot;])
+        end
+        subgraph python_render[&quot;render.py&quot;]
+            python_render_fn_build_forest([&quot;build_forest&quot;])
+            python_render_fn_light_tint([&quot;light_tint&quot;])
+            python_render_fn_render([&quot;render&quot;])
+        end
+        subgraph python_server[&quot;server.py&quot;]
+            python_server_fn_generate_dependency_graph([&quot;generate_dependency_graph&quot;])
+            python_server_fn_generate_one([&quot;generate_one&quot;])
+            python_server_fn_main([&quot;main&quot;])
+        end
+    end
 
+    python_server_fn_generate_one &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_extract_fn_own_direct_files &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_extract_fn_hash_files &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_extract_fn_find_domains_in_tree &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_call_graph_fn_render_call_graph_html &lt;--&gt;|calls / returns| python_server_fn_generate_one
+    python_call_graph_fn_render_call_graph &lt;--&gt;|calls / returns| python_server_fn_generate_one
+    python_call_graph_fn_extract_call_graph &lt;--&gt;|calls / returns| python_server_fn_generate_one
+    python_extract_fn_hash_files &lt;--&gt;|calls / returns| python_server_fn_generate_one
+    python_extract_fn_own_direct_files &lt;--&gt;|calls / returns| python_server_fn_generate_one
+    python_render_fn_render &lt;--&gt;|calls / returns| python_server_fn_generate_one
+    python_extract_fn_extract &lt;--&gt;|calls / returns| python_server_fn_generate_one
+    python_server_fn_generate_one &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_extract_fn_own_direct_files &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_extract_fn_hash_files &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_extract_fn_find_domains_in_tree &lt;--&gt;|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_render_fn_light_tint &lt;--&gt;|calls / returns| python_render_fn_render
+    python_render_fn_build_forest &lt;--&gt;|calls / returns| python_render_fn_render
+    python_extract_fn_dotted_path &lt;--&gt;|calls / returns| python_extract_fn_sibling_dotted
+    python_extract_fn_dotted_path &lt;--&gt;|calls / returns| python_extract_fn_find_domains_in_tree
+    python_extract_fn_dotted_path &lt;--&gt;|calls / returns| python_extract_fn_file_node_id
+    python_extract_fn_sibling_dotted &lt;--&gt;|calls / returns| python_extract_fn_extract
+    python_extract_fn_parse_imports &lt;--&gt;|calls / returns| python_extract_fn_extract
+    python_extract_fn_file_node_id &lt;--&gt;|calls / returns| python_extract_fn_extract
+    python_extract_fn_resolve_target &lt;--&gt;|calls / returns| python_extract_fn_extract
+    python_extract_fn_find_domains_in_tree &lt;--&gt;|calls / returns| python_extract_fn_extract
+    python_extract_fn_dotted_path &lt;--&gt;|calls / returns| python_extract_fn_extract
+    python_extract_fn_sibling_dotted &lt;--&gt;|calls / returns| python_call_graph_fn_resolve_type_definition
+    python_extract_fn_resolve_target &lt;--&gt;|calls / returns| python_call_graph_fn_resolve_type_definition
+    python_extract_fn_parse_imports &lt;--&gt;|calls / returns| python_call_graph_fn_resolve_type_definition
+    python_extract_fn_sibling_dotted &lt;--&gt;|calls / returns| python_call_graph_fn_resolve_function_definition
+    python_extract_fn_resolve_target &lt;--&gt;|calls / returns| python_call_graph_fn_resolve_function_definition
+    python_extract_fn_parse_imports &lt;--&gt;|calls / returns| python_call_graph_fn_resolve_function_definition
+    python_call_graph_fn_render_call_graph &lt;--&gt;|calls / returns| python_call_graph_fn_render_call_graph_html
+    python_render_fn_light_tint &lt;--&gt;|calls / returns| python_call_graph_fn_render_call_graph
+    python_render_fn_build_forest &lt;--&gt;|calls / returns| python_call_graph_fn_render_call_graph
+    python_extract_fn_file_node_id &lt;--&gt;|calls / returns| python_call_graph_fn_extract_call_graph
+    python_call_graph_fn_resolve_function_definition &lt;--&gt;|calls / returns| python_call_graph_fn_extract_call_graph
+    python_call_graph_fn_resolve_type_definition &lt;--&gt;|calls / returns| python_call_graph_fn_extract_call_graph
+    python_extract_fn_dotted_path &lt;--&gt;|calls / returns| python_call_graph_fn_extract_call_graph
+
+    classDef pythonDomain fill:#2a78d6,stroke:#184f95,color:#ffffff,stroke-width:1px;
     classDef fileGroup fill:none,stroke:#999999,stroke-width:1px,stroke-dasharray: 2 2;
 
+    class python pythonDomain
+    class python_call_graph,python_extract,python_render,python_server fileGroup
 
+    style python fill:#e9f1fa,stroke:#2a78d6,stroke-width:2px;
 
 </pre>
 </body>

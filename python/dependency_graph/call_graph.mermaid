@@ -3,8 +3,82 @@ config:
   layout: elk
 ---
 graph BT
+    subgraph python["python"]
+        subgraph python_call_graph["call_graph.py"]
+            python_call_graph_fn_extract_call_graph(["extract_call_graph"])
+            python_call_graph_fn_render_call_graph(["render_call_graph"])
+            python_call_graph_fn_render_call_graph_html(["render_call_graph_html"])
+            python_call_graph_fn_resolve_function_definition(["resolve_function_definition"])
+            python_call_graph_fn_resolve_type_definition(["resolve_type_definition"])
+        end
+        subgraph python_extract["extract.py"]
+            python_extract_fn_dotted_path(["dotted_path"])
+            python_extract_fn_extract(["extract"])
+            python_extract_fn_file_node_id(["file_node_id"])
+            python_extract_fn_find_domains_in_tree(["find_domains_in_tree"])
+            python_extract_fn_hash_files(["hash_files"])
+            python_extract_fn_own_direct_files(["own_direct_files"])
+            python_extract_fn_parse_imports(["parse_imports"])
+            python_extract_fn_resolve_target(["resolve_target"])
+            python_extract_fn_sibling_dotted(["sibling_dotted"])
+        end
+        subgraph python_render["render.py"]
+            python_render_fn_build_forest(["build_forest"])
+            python_render_fn_light_tint(["light_tint"])
+            python_render_fn_render(["render"])
+        end
+        subgraph python_server["server.py"]
+            python_server_fn_generate_dependency_graph(["generate_dependency_graph"])
+            python_server_fn_generate_one(["generate_one"])
+            python_server_fn_main(["main"])
+        end
+    end
 
+    python_server_fn_generate_one <-->|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_extract_fn_own_direct_files <-->|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_extract_fn_hash_files <-->|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_extract_fn_find_domains_in_tree <-->|calls / returns via _generate_dependency_graph| python_server_fn_main
+    python_call_graph_fn_render_call_graph_html <-->|calls / returns| python_server_fn_generate_one
+    python_call_graph_fn_render_call_graph <-->|calls / returns| python_server_fn_generate_one
+    python_call_graph_fn_extract_call_graph <-->|calls / returns| python_server_fn_generate_one
+    python_extract_fn_hash_files <-->|calls / returns| python_server_fn_generate_one
+    python_extract_fn_own_direct_files <-->|calls / returns| python_server_fn_generate_one
+    python_render_fn_render <-->|calls / returns| python_server_fn_generate_one
+    python_extract_fn_extract <-->|calls / returns| python_server_fn_generate_one
+    python_server_fn_generate_one <-->|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_extract_fn_own_direct_files <-->|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_extract_fn_hash_files <-->|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_extract_fn_find_domains_in_tree <-->|calls / returns via _generate_dependency_graph| python_server_fn_generate_dependency_graph
+    python_render_fn_light_tint <-->|calls / returns| python_render_fn_render
+    python_render_fn_build_forest <-->|calls / returns| python_render_fn_render
+    python_extract_fn_dotted_path <-->|calls / returns| python_extract_fn_sibling_dotted
+    python_extract_fn_dotted_path <-->|calls / returns| python_extract_fn_find_domains_in_tree
+    python_extract_fn_dotted_path <-->|calls / returns| python_extract_fn_file_node_id
+    python_extract_fn_sibling_dotted <-->|calls / returns| python_extract_fn_extract
+    python_extract_fn_parse_imports <-->|calls / returns| python_extract_fn_extract
+    python_extract_fn_file_node_id <-->|calls / returns| python_extract_fn_extract
+    python_extract_fn_resolve_target <-->|calls / returns| python_extract_fn_extract
+    python_extract_fn_find_domains_in_tree <-->|calls / returns| python_extract_fn_extract
+    python_extract_fn_dotted_path <-->|calls / returns| python_extract_fn_extract
+    python_extract_fn_sibling_dotted <-->|calls / returns| python_call_graph_fn_resolve_type_definition
+    python_extract_fn_resolve_target <-->|calls / returns| python_call_graph_fn_resolve_type_definition
+    python_extract_fn_parse_imports <-->|calls / returns| python_call_graph_fn_resolve_type_definition
+    python_extract_fn_sibling_dotted <-->|calls / returns| python_call_graph_fn_resolve_function_definition
+    python_extract_fn_resolve_target <-->|calls / returns| python_call_graph_fn_resolve_function_definition
+    python_extract_fn_parse_imports <-->|calls / returns| python_call_graph_fn_resolve_function_definition
+    python_call_graph_fn_render_call_graph <-->|calls / returns| python_call_graph_fn_render_call_graph_html
+    python_render_fn_light_tint <-->|calls / returns| python_call_graph_fn_render_call_graph
+    python_render_fn_build_forest <-->|calls / returns| python_call_graph_fn_render_call_graph
+    python_extract_fn_file_node_id <-->|calls / returns| python_call_graph_fn_extract_call_graph
+    python_call_graph_fn_resolve_function_definition <-->|calls / returns| python_call_graph_fn_extract_call_graph
+    python_call_graph_fn_resolve_type_definition <-->|calls / returns| python_call_graph_fn_extract_call_graph
+    python_extract_fn_dotted_path <-->|calls / returns| python_call_graph_fn_extract_call_graph
+
+    classDef pythonDomain fill:#2a78d6,stroke:#184f95,color:#ffffff,stroke-width:1px;
     classDef fileGroup fill:none,stroke:#999999,stroke-width:1px,stroke-dasharray: 2 2;
 
+    class python pythonDomain
+    class python_call_graph,python_extract,python_render,python_server fileGroup
 
+    style python fill:#e9f1fa,stroke:#2a78d6,stroke-width:2px;
 

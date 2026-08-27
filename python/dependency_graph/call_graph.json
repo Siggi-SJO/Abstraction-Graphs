@@ -7,7 +7,360 @@
       "in_tree": true
     }
   ],
-  "functions": [],
-  "calls": [],
+  "functions": [
+    {
+      "id": "python_call_graph_fn_extract_call_graph",
+      "qualname": "extract_call_graph",
+      "domain": "python",
+      "file_id": "python_call_graph",
+      "filename": "call_graph.py"
+    },
+    {
+      "id": "python_call_graph_fn_render_call_graph",
+      "qualname": "render_call_graph",
+      "domain": "python",
+      "file_id": "python_call_graph",
+      "filename": "call_graph.py"
+    },
+    {
+      "id": "python_call_graph_fn_render_call_graph_html",
+      "qualname": "render_call_graph_html",
+      "domain": "python",
+      "file_id": "python_call_graph",
+      "filename": "call_graph.py"
+    },
+    {
+      "id": "python_call_graph_fn_resolve_function_definition",
+      "qualname": "resolve_function_definition",
+      "domain": "python",
+      "file_id": "python_call_graph",
+      "filename": "call_graph.py"
+    },
+    {
+      "id": "python_call_graph_fn_resolve_type_definition",
+      "qualname": "resolve_type_definition",
+      "domain": "python",
+      "file_id": "python_call_graph",
+      "filename": "call_graph.py"
+    },
+    {
+      "id": "python_extract_fn_dotted_path",
+      "qualname": "dotted_path",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_extract",
+      "qualname": "extract",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_file_node_id",
+      "qualname": "file_node_id",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_find_domains_in_tree",
+      "qualname": "find_domains_in_tree",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_hash_files",
+      "qualname": "hash_files",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_own_direct_files",
+      "qualname": "own_direct_files",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_parse_imports",
+      "qualname": "parse_imports",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_resolve_target",
+      "qualname": "resolve_target",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_extract_fn_sibling_dotted",
+      "qualname": "sibling_dotted",
+      "domain": "python",
+      "file_id": "python_extract",
+      "filename": "extract.py"
+    },
+    {
+      "id": "python_render_fn_build_forest",
+      "qualname": "build_forest",
+      "domain": "python",
+      "file_id": "python_render",
+      "filename": "render.py"
+    },
+    {
+      "id": "python_render_fn_light_tint",
+      "qualname": "light_tint",
+      "domain": "python",
+      "file_id": "python_render",
+      "filename": "render.py"
+    },
+    {
+      "id": "python_render_fn_render",
+      "qualname": "render",
+      "domain": "python",
+      "file_id": "python_render",
+      "filename": "render.py"
+    },
+    {
+      "id": "python_server_fn_generate_dependency_graph",
+      "qualname": "generate_dependency_graph",
+      "domain": "python",
+      "file_id": "python_server",
+      "filename": "server.py"
+    },
+    {
+      "id": "python_server_fn_generate_one",
+      "qualname": "generate_one",
+      "domain": "python",
+      "file_id": "python_server",
+      "filename": "server.py"
+    },
+    {
+      "id": "python_server_fn_main",
+      "qualname": "main",
+      "domain": "python",
+      "file_id": "python_server",
+      "filename": "server.py"
+    }
+  ],
+  "calls": [
+    {
+      "from": "python_call_graph_fn_extract_call_graph",
+      "to": "python_extract_fn_dotted_path",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_extract_call_graph",
+      "to": "python_call_graph_fn_resolve_type_definition",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_extract_call_graph",
+      "to": "python_call_graph_fn_resolve_function_definition",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_extract_call_graph",
+      "to": "python_extract_fn_file_node_id",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_render_call_graph",
+      "to": "python_render_fn_build_forest",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_render_call_graph",
+      "to": "python_render_fn_light_tint",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_render_call_graph_html",
+      "to": "python_call_graph_fn_render_call_graph",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_resolve_function_definition",
+      "to": "python_extract_fn_parse_imports",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_resolve_function_definition",
+      "to": "python_extract_fn_resolve_target",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_resolve_function_definition",
+      "to": "python_extract_fn_sibling_dotted",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_resolve_type_definition",
+      "to": "python_extract_fn_parse_imports",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_resolve_type_definition",
+      "to": "python_extract_fn_resolve_target",
+      "via": []
+    },
+    {
+      "from": "python_call_graph_fn_resolve_type_definition",
+      "to": "python_extract_fn_sibling_dotted",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_extract",
+      "to": "python_extract_fn_dotted_path",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_extract",
+      "to": "python_extract_fn_find_domains_in_tree",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_extract",
+      "to": "python_extract_fn_resolve_target",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_extract",
+      "to": "python_extract_fn_file_node_id",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_extract",
+      "to": "python_extract_fn_parse_imports",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_extract",
+      "to": "python_extract_fn_sibling_dotted",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_file_node_id",
+      "to": "python_extract_fn_dotted_path",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_find_domains_in_tree",
+      "to": "python_extract_fn_dotted_path",
+      "via": []
+    },
+    {
+      "from": "python_extract_fn_sibling_dotted",
+      "to": "python_extract_fn_dotted_path",
+      "via": []
+    },
+    {
+      "from": "python_render_fn_render",
+      "to": "python_render_fn_build_forest",
+      "via": []
+    },
+    {
+      "from": "python_render_fn_render",
+      "to": "python_render_fn_light_tint",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_generate_dependency_graph",
+      "to": "python_extract_fn_find_domains_in_tree",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    },
+    {
+      "from": "python_server_fn_generate_dependency_graph",
+      "to": "python_extract_fn_hash_files",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    },
+    {
+      "from": "python_server_fn_generate_dependency_graph",
+      "to": "python_extract_fn_own_direct_files",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    },
+    {
+      "from": "python_server_fn_generate_dependency_graph",
+      "to": "python_server_fn_generate_one",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    },
+    {
+      "from": "python_server_fn_generate_one",
+      "to": "python_extract_fn_extract",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_generate_one",
+      "to": "python_render_fn_render",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_generate_one",
+      "to": "python_extract_fn_own_direct_files",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_generate_one",
+      "to": "python_extract_fn_hash_files",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_generate_one",
+      "to": "python_call_graph_fn_extract_call_graph",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_generate_one",
+      "to": "python_call_graph_fn_render_call_graph",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_generate_one",
+      "to": "python_call_graph_fn_render_call_graph_html",
+      "via": []
+    },
+    {
+      "from": "python_server_fn_main",
+      "to": "python_extract_fn_find_domains_in_tree",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    },
+    {
+      "from": "python_server_fn_main",
+      "to": "python_extract_fn_hash_files",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    },
+    {
+      "from": "python_server_fn_main",
+      "to": "python_extract_fn_own_direct_files",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    },
+    {
+      "from": "python_server_fn_main",
+      "to": "python_server_fn_generate_one",
+      "via": [
+        "_generate_dependency_graph"
+      ]
+    }
+  ],
   "main_types": []
 }

@@ -42,8 +42,34 @@
   "standalone_files": [],
   "broken": [],
   "violations": [],
-  "edges": [],
-  "own_content_hash": "a67ee7e24347785c424389617190e56bd6cde590a44c2f1225ff71d7293fba21",
+  "edges": [
+    {
+      "from": "python_extract",
+      "to": "python_call_graph",
+      "kind": "internal"
+    },
+    {
+      "from": "python_render",
+      "to": "python_call_graph",
+      "kind": "internal"
+    },
+    {
+      "from": "python_extract",
+      "to": "python_server",
+      "kind": "internal"
+    },
+    {
+      "from": "python_render",
+      "to": "python_server",
+      "kind": "internal"
+    },
+    {
+      "from": "python_call_graph",
+      "to": "python_server",
+      "kind": "internal"
+    }
+  ],
+  "own_content_hash": "24123428875409a8b56f4d7170008530dc45056d16a6c7015661f1c32859bd08",
   "reverse_scan_applied": true,
   "types_cluster": null
 }
