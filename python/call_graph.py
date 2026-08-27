@@ -26,7 +26,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from extract import dotted_path, file_node_id, parse_imports, resolve_target
+from extract import dotted_path, file_node_id, parse_imports, resolve_target, sibling_dotted
 from render import PALETTE, build_forest, light_tint
 
 
@@ -142,8 +142,14 @@ def resolve_type_definition(
         if name not in imp.names:
             continue
         kind, path = resolve_target(repo_root, imp.module)
+        imp_module = imp.module
+        if kind == "external":
+            resolved = sibling_dotted(repo_root, file_path, imp.module)
+            if resolved is not None:
+                imp_module = resolved
+                kind, path = resolve_target(repo_root, resolved)
         if kind in ("file", "package"):
-            result = resolve_type_definition(repo_root, imp.module, path, name, cache)
+            result = resolve_type_definition(repo_root, imp_module, path, name, cache)
             if result is not None:
                 cache[key] = result
                 return result
@@ -327,8 +333,14 @@ def resolve_function_definition(
         if name not in imp.names:
             continue
         kind, path = resolve_target(repo_root, imp.module)
+        imp_module = imp.module
+        if kind == "external":
+            resolved = sibling_dotted(repo_root, file_path, imp.module)
+            if resolved is not None:
+                imp_module = resolved
+                kind, path = resolve_target(repo_root, resolved)
         if kind in ("file", "package"):
-            result = resolve_function_definition(repo_root, imp.module, path, name, cache)
+            result = resolve_function_definition(repo_root, imp_module, path, name, cache)
             if result is not None:
                 cache[key] = result
                 return result

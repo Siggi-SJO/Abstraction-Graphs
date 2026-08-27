@@ -101,6 +101,30 @@ def resolve_target(repo_root: Path, module: str) -> tuple[str, Path | None]:
     return "missing", None
 
 
+def sibling_dotted(repo_root: Path, file_path: Path, module: str) -> str | None:
+    """If `module` resolves to a .py file or package that is a sibling of `file_path`
+    (and lies within repo_root), return its repo-root-relative dotted path. Catches
+    the sys.path.insert(0, script_dir) pattern where scripts import sibling modules
+    by bare name rather than as a dotted package path."""
+    top = module.split(".")[0]
+    file_dir = file_path.parent
+    sibling_py = file_dir / f"{top}.py"
+    sibling_pkg = file_dir / top / "__init__.py"
+    if sibling_py.is_file():
+        candidate = sibling_py
+    elif sibling_pkg.is_file():
+        candidate = sibling_pkg
+    else:
+        return None
+    try:
+        candidate.relative_to(repo_root)
+    except ValueError:
+        return None
+    base = dotted_path(repo_root, candidate)
+    rest = module[len(top):]
+    return (base + rest) if rest else base
+
+
 @dataclass
 class ImportRef:
     module: str
@@ -363,7 +387,13 @@ def extract(repo_root: Path, target_dir: Path, do_reverse_scan: bool = True) -> 
                 continue
             kind, path = resolve_target(repo_root, imp.module)
             if kind == "external":
-                continue
+                resolved = sibling_dotted(repo_root, f, imp.module)
+                if resolved is None:
+                    continue
+                imp = ImportRef(resolved, imp.names)
+                kind, path = resolve_target(repo_root, resolved)
+                if kind not in ("file", "package"):
+                    continue
             if kind == "missing":
                 broken.setdefault(imp.module, f_dotted)
                 edges.append({"from": f_id, "to": node_id(imp.module), "kind": "missing"})
